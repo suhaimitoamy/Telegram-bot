@@ -208,6 +208,7 @@ def run_simulation(limit: int = 800, output_path: str | None = None) -> Simulati
     all_trades: list[SimTrade] = []
     last_setup_key: str | None = None
     current_area: tuple[float, float] | None = None
+    active_setup: dict[str, Any] | None = None
     entry_triggered = False
     last_close: float | None = None
     last_bar_close: float | None = None
@@ -219,6 +220,7 @@ def run_simulation(limit: int = 800, output_path: str | None = None) -> Simulati
         'edge_area': 0,
         'missing_previous_close': 0,
         'insufficient_stall': 0,
+        'no_active_setup': 0,
     }
     blocker_examples: dict[str, list[dict[str, Any]]] = {}
 
@@ -228,29 +230,42 @@ def run_simulation(limit: int = 800, output_path: str | None = None) -> Simulati
         update_open_trades(open_trades, candle)
         window_15m = aggregate_to_15m(window_5m)
         snapshot = snapshot_from_bars(window_5m, window_15m)
-        if not snapshot:
+
+        if snapshot:
+            signal_data = snapshot.get('signal', {})
+            signal = signal_data.get('signal')
+            break_type = snapshot.get('break')
+            if signal and signal != 'NO TRADE' and break_type:
+                setup_key = (
+                    f"{snapshot.get('break')}_{signal}_{snapshot.get('support')}_{snapshot.get('resistance')}"
+                )
+                if setup_key != last_setup_key:
+                    last_setup_key = setup_key
+                    entry_triggered = False
+                    current_area = (signal_data['entry_low'], signal_data['entry_high'])
+                    active_setup = snapshot
+                    stall_count = 0
+                    last_close = None
+                    setup_count += 1
+                    last_bar_close = candle['close']
+                    continue
+                active_setup = snapshot
+
+        if not current_area or not active_setup:
+            record_blocker(
+                blocker_counts,
+                blocker_examples,
+                'no_active_setup',
+                {
+                    'timestamp': candle['datetime'].isoformat(),
+                    'price': candle['close'],
+                },
+            )
             last_bar_close = candle['close']
             continue
-        signal_data = snapshot.get('signal', {})
+
+        signal_data = active_setup.get('signal', {})
         signal = signal_data.get('signal')
-        if not signal or signal == 'NO TRADE':
-            last_bar_close = candle['close']
-            continue
-        setup_key = (
-            f"{snapshot.get('break')}_{signal}_{snapshot.get('support')}_{snapshot.get('resistance')}"
-        )
-        if setup_key != last_setup_key:
-            last_setup_key = setup_key
-            entry_triggered = False
-            current_area = (signal_data['entry_low'], signal_data['entry_high'])
-            stall_count = 0
-            last_close = None
-            setup_count += 1
-            last_bar_close = candle['close']
-            continue
-        if not current_area:
-            last_bar_close = candle['close']
-            continue
         low, high = current_area
         mid = (low + high) / 2
         if last_bar_close is not None:
@@ -299,11 +314,11 @@ def run_simulation(limit: int = 800, output_path: str | None = None) -> Simulati
                 sl=signal_data['sl'],
                 tp=signal_data['tp'],
                 context={
-                    'structure': snapshot.get('structure'),
-                    'break': snapshot.get('break'),
-                    'state': snapshot.get('state'),
-                    'impulse': snapshot.get('impulse'),
-                    'simulation_note': 'Entry uses close-inside-zone with bar replay',
+                    'structure': active_setup.get('structure'),
+                    'break': active_setup.get('break'),
+                    'state': active_setup.get('state'),
+                    'impulse': active_setup.get('impulse'),
+                    'simulation_note': 'Entry uses persistent setup monitoring with bar replay',
                 },
             )
             open_trades.append(trade)
@@ -320,12 +335,12 @@ def run_simulation(limit: int = 800, output_path: str | None = None) -> Simulati
         symbol=SYMBOL,
         interval='5min->15min replay',
         bars=len(candles_5m),
-        fill_model='conservative_bar_replay',
+        fill_model='persistent_setup_bar_replay',
         warnings=[
             'This is not tick-accurate.',
             'No bid/ask spread, slippage, latency, or partial fills are modeled.',
             'If SL and TP are both touched in the same bar, the simulator assumes SL first.',
-            'Entry requires candle close inside the zone, which is intentionally conservative.',
+            'Setups remain active after the breakout bar so retest bars can be evaluated.',
         ],
         setup_count=setup_count,
         entry_count=len(all_trades),

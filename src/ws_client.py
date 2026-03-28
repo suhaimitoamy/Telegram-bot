@@ -17,6 +17,7 @@ last_price = None
 last_setup_key = None
 entry_triggered = False
 current_area = None
+active_setup = None
 running = True
 last_tick_price = None
 stall_count = 0
@@ -37,33 +38,38 @@ def entry_confirmation(signal, price, previous_price, current_stall_count):
 
 
 def process(price):
-    global last_setup_key, entry_triggered, current_area
+    global last_setup_key, entry_triggered, current_area, active_setup
     global last_tick_price, stall_count
 
     data = snapshot(external_price=price)
-    if not data:
+    if data:
+        signal_data = data.get('signal', {})
+        signal = signal_data.get('signal')
+        break_type = data.get('break')
+        if signal and signal != 'NO TRADE' and break_type:
+            entry_low = signal_data.get('entry_low')
+            entry_high = signal_data.get('entry_high')
+            setup_key = f"{break_type}_{signal}_{data.get('support')}_{data.get('resistance')}"
+            if setup_key != last_setup_key:
+                last_setup_key = setup_key
+                entry_triggered = False
+                current_area = (entry_low, entry_high)
+                active_setup = data
+                stall_count = 0
+                last_tick_price = None
+                print(f'📡 SETUP {signal} | Area {entry_low}-{entry_high}')
+                send_setup(data)
+                return
+            active_setup = data
+
+    if not current_area or not active_setup:
         return
-    signal_data = data.get('signal', {})
+
+    signal_data = active_setup.get('signal', {})
     signal = signal_data.get('signal')
     if not signal or signal == 'NO TRADE':
         return
-    entry_low = signal_data.get('entry_low')
-    entry_high = signal_data.get('entry_high')
-    break_type = data.get('break')
-    if not break_type:
-        return
-    setup_key = f"{break_type}_{signal}_{data.get('support')}_{data.get('resistance')}"
-    if setup_key != last_setup_key:
-        last_setup_key = setup_key
-        entry_triggered = False
-        current_area = (entry_low, entry_high)
-        stall_count = 0
-        last_tick_price = None
-        print(f'📡 SETUP {signal} | Area {entry_low}-{entry_high}')
-        send_setup(data)
-        return
-    if not current_area:
-        return
+
     low, high = current_area
     mid = (low + high) / 2
     if last_tick_price is not None:
@@ -85,7 +91,7 @@ def process(price):
             return
         entry_triggered = True
         print(f'🚀 ENTRY TRIGGERED {signal} @ {price}')
-        send_entry(data)
+        send_entry(active_setup)
         entry = round(mid, 2)
         log_trade({
             'signal': signal,
@@ -95,10 +101,10 @@ def process(price):
             'sl': signal_data.get('sl'),
             'tp': signal_data.get('tp'),
             'context': {
-                'structure': data.get('structure'),
-                'break': data.get('break'),
-                'state': data.get('state'),
-                'impulse': data.get('impulse'),
+                'structure': active_setup.get('structure'),
+                'break': active_setup.get('break'),
+                'state': active_setup.get('state'),
+                'impulse': active_setup.get('impulse'),
             },
             'result': 'open',
         })
