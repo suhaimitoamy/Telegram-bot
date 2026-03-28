@@ -25,10 +25,6 @@ stall_count = 0
 def valid_entry(signal, price, previous_price):
     if previous_price is None:
         return False
-    if signal == 'SELL' and price > previous_price:
-        return False
-    if signal == 'BUY' and price < previous_price:
-        return False
     return True
 
 
@@ -37,14 +33,7 @@ def entry_confirmation(signal, price, previous_price, current_stall_count):
         return False
     if current_stall_count < 1:
         return False
-    move = abs(price - previous_price)
-    if move > 1.0:
-        return False
-    if signal == 'BUY' and price >= previous_price:
-        return True
-    if signal == 'SELL' and price <= previous_price:
-        return True
-    return False
+    return True
 
 
 def process(price):
@@ -83,10 +72,16 @@ def process(price):
     last_tick_price = price
     if not entry_triggered and low <= price <= high:
         if abs(price - mid) > ((high - low) * 0.6):
+            print(f'[ENTRY BLOCKED] edge area | price={price} mid={mid} low={low} high={high}')
             return
         if not valid_entry(signal, price, last_price):
+            print(f'[ENTRY BLOCKED] valid_entry failed | signal={signal} price={price} last_price={last_price}')
             return
         if not entry_confirmation(signal, price, last_price, stall_count):
+            print(
+                f'[ENTRY BLOCKED] confirmation failed | signal={signal} price={price} '
+                f'last_price={last_price} stall={stall_count}'
+            )
             return
         entry_triggered = True
         print(f'🚀 ENTRY TRIGGERED {signal} @ {price}')
