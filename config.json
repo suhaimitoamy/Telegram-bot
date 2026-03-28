@@ -1,1 +1,48 @@
-{"use_retest": true, "use_impulse": false, "allow_counter": false, "min_rr": 2.0}
+{
+  "use_retest": true,
+  "use_impulse": false,
+  "allow_counter": false,
+  "min_rr": 2.0,
+  "profile_filters": {
+    "BUY_UPTREND": {
+      "enabled": false,
+      "min_setup_quality": 6,
+      "min_confirmation_score": 4,
+      "max_setup_age_bars": 8,
+      "depth_min": 0.18,
+      "depth_max": 0.85,
+      "required_stall": 1,
+      "require_reclaim": true
+    },
+    "SELL_DOWNTREND": {
+      "enabled": true,
+      "min_setup_quality": 5,
+      "min_confirmation_score": 3,
+      "max_setup_age_bars": 10,
+      "depth_min": 0.18,
+      "depth_max": 0.9,
+      "required_stall": 0,
+      "require_reclaim": true
+    },
+    "BUY_RANGE": {
+      "enabled": false,
+      "min_setup_quality": 6,
+      "min_confirmation_score": 4,
+      "max_setup_age_bars": 6,
+      "depth_min": 0.2,
+      "depth_max": 0.8,
+      "required_stall": 1,
+      "require_reclaim": true
+    },
+    "SELL_RANGE": {
+      "enabled": true,
+      "min_setup_quality": 5,
+      "min_confirmation_score": 4,
+      "max_setup_age_bars": 6,
+      "depth_min": 0.2,
+      "depth_max": 0.85,
+      "required_stall": 1,
+      "require_reclaim": true
+    }
+  }
+}

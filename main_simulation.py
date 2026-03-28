@@ -26,6 +26,7 @@ def main():
         'open_count': result.open_count,
         'winrate': result.winrate,
         'blocker_counts': result.blocker_counts,
+        'profile_stats': result.profile_stats,
         'report': args.output,
         'warnings': result.warnings,
     }, indent=2))
