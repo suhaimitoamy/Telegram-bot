@@ -17,6 +17,7 @@ from src.market_engine import (
     get_state,
     load_config,
     minor_structure,
+    recent_average_range,
     structure,
     validate_break,
 )
@@ -142,7 +143,19 @@ def snapshot_from_bars(m5: list[dict[str, Any]], m15: list[dict[str, Any]]) -> d
     impulse = quality['momentum'] and quality['clean']
     if config.get('use_impulse', False) and not impulse:
         return None
-    setup = build_setup(price, support, resistance, current_break, state)
+    avg_range = recent_average_range(m5, 10)
+    break_span = max(abs(resistance - support), avg_range)
+    zone_half_width = min(max(avg_range * 0.35, 0.6), max(1.8, break_span * 0.6))
+    sl_buffer = max(zone_half_width * 1.25, 1.0)
+    setup = build_setup(
+        price,
+        support,
+        resistance,
+        current_break,
+        state,
+        zone_half_width=zone_half_width,
+        sl_buffer=sl_buffer,
+    )
     return {
         'timestamp': m5[-1]['datetime'].isoformat(),
         'price': price,
@@ -153,6 +166,7 @@ def snapshot_from_bars(m5: list[dict[str, Any]], m15: list[dict[str, Any]]) -> d
         'state': state,
         'quality': quality,
         'impulse': impulse,
+        'avg_range': round(avg_range, 2),
         'signal': setup,
     }
 
@@ -249,7 +263,6 @@ def run_simulation(limit: int = 800, output_path: str | None = None) -> Simulati
                     setup_count += 1
                     last_bar_close = candle['close']
                     continue
-                active_setup = snapshot
 
         if not current_area or not active_setup:
             record_blocker(
@@ -268,6 +281,9 @@ def run_simulation(limit: int = 800, output_path: str | None = None) -> Simulati
         signal = signal_data.get('signal')
         low, high = current_area
         mid = (low + high) / 2
+        touch_buffer = signal_data.get('touch_buffer', max((high - low) * 0.5, 0.25))
+        trigger_low = low - touch_buffer
+        trigger_high = high + touch_buffer
         if last_bar_close is not None:
             diff = abs(candle['close'] - last_bar_close)
             stall_count = stall_count + 1 if diff < 0.3 else 0
@@ -277,6 +293,8 @@ def run_simulation(limit: int = 800, output_path: str | None = None) -> Simulati
             'price': candle['close'],
             'zone_low': low,
             'zone_high': high,
+            'trigger_low': round(trigger_low, 2),
+            'trigger_high': round(trigger_high, 2),
             'mid': round(mid, 2),
             'stall_count': stall_count,
         }
@@ -290,12 +308,12 @@ def run_simulation(limit: int = 800, output_path: str | None = None) -> Simulati
             last_close = candle['close']
             last_bar_close = candle['close']
             continue
-        touched_zone = candle['low'] <= high and candle['high'] >= low
-        close_inside = low <= candle['close'] <= high
-        centered = abs(candle['close'] - mid) <= ((high - low) * 0.6)
+        touched_zone = candle['low'] <= trigger_high and candle['high'] >= trigger_low
+        effective_price = min(max(candle['close'], trigger_low), trigger_high)
+        centered = abs(effective_price - mid) <= (((high - low) * 0.8) + touch_buffer)
         valid_price = last_close is not None
         confirmed = stall_count >= 1
-        if not touched_zone or not close_inside:
+        if not touched_zone:
             record_blocker(blocker_counts, blocker_examples, 'outside_zone', blocker_payload)
         elif not centered:
             record_blocker(blocker_counts, blocker_examples, 'edge_area', blocker_payload)
@@ -318,7 +336,8 @@ def run_simulation(limit: int = 800, output_path: str | None = None) -> Simulati
                     'break': active_setup.get('break'),
                     'state': active_setup.get('state'),
                     'impulse': active_setup.get('impulse'),
-                    'simulation_note': 'Entry uses persistent setup monitoring with bar replay',
+                    'avg_range': active_setup.get('avg_range'),
+                    'simulation_note': 'Entry uses volatility-adaptive zone and touch trigger replay',
                 },
             )
             open_trades.append(trade)
@@ -335,12 +354,13 @@ def run_simulation(limit: int = 800, output_path: str | None = None) -> Simulati
         symbol=SYMBOL,
         interval='5min->15min replay',
         bars=len(candles_5m),
-        fill_model='persistent_setup_bar_replay',
+        fill_model='adaptive_zone_touch_replay',
         warnings=[
             'This is not tick-accurate.',
             'No bid/ask spread, slippage, latency, or partial fills are modeled.',
             'If SL and TP are both touched in the same bar, the simulator assumes SL first.',
             'Setups remain active after the breakout bar so retest bars can be evaluated.',
+            'Entry is allowed on touch of a volatility-adaptive trigger band, not only close-inside-zone.',
         ],
         setup_count=setup_count,
         entry_count=len(all_trades),

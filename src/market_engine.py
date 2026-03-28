@@ -125,6 +125,14 @@ def candle_quality(candle, prev, data):
     }
 
 
+def recent_average_range(data, window=10):
+    sample = data[-window:] if len(data) >= window else data
+    if not sample:
+        return 0.5
+    ranges = [max(item['high'] - item['low'], 0.01) for item in sample]
+    return sum(ranges) / len(ranges)
+
+
 def get_state(break_type, structure_tf):
     if not break_type:
         return 'NO_SETUP'
@@ -135,16 +143,16 @@ def get_state(break_type, structure_tf):
     return 'VALID'
 
 
-def build_setup(price, support, resistance, break_type, state):
+def build_setup(price, support, resistance, break_type, state, zone_half_width, sl_buffer):
     config = load_config()
     if not config.get('allow_counter', False) and state == 'COUNTER':
         return {'signal': 'NO TRADE'}
     rr = config.get('min_rr', 2.0)
-    retest_half_width = 0.5
+    touch_buffer = max(zone_half_width * 0.5, 0.25)
     if break_type == 'BREAK_UP':
-        entry_low = resistance - retest_half_width
-        entry_high = resistance + retest_half_width
-        sl = support - 1.0
+        entry_low = resistance - zone_half_width
+        entry_high = resistance + zone_half_width
+        sl = support - sl_buffer
         entry = (entry_low + entry_high) / 2
         risk = max(entry - sl, 0.1)
         tp = entry + (risk * rr)
@@ -154,11 +162,13 @@ def build_setup(price, support, resistance, break_type, state):
             'entry_high': round(entry_high, 2),
             'sl': round(sl, 2),
             'tp': round(tp, 2),
+            'touch_buffer': round(touch_buffer, 2),
+            'zone_half_width': round(zone_half_width, 2),
         }
     if break_type == 'BREAK_DOWN':
-        entry_low = support - retest_half_width
-        entry_high = support + retest_half_width
-        sl = resistance + 1.0
+        entry_low = support - zone_half_width
+        entry_high = support + zone_half_width
+        sl = resistance + sl_buffer
         entry = (entry_low + entry_high) / 2
         risk = max(sl - entry, 0.1)
         tp = entry - (risk * rr)
@@ -168,6 +178,8 @@ def build_setup(price, support, resistance, break_type, state):
             'entry_high': round(entry_high, 2),
             'sl': round(sl, 2),
             'tp': round(tp, 2),
+            'touch_buffer': round(touch_buffer, 2),
+            'zone_half_width': round(zone_half_width, 2),
         }
     return {'signal': 'NO TRADE'}
 
@@ -197,7 +209,19 @@ def snapshot(external_price=None):
     impulse = quality['momentum'] and quality['clean']
     if config.get('use_impulse', False) and not impulse:
         return None
-    setup = build_setup(price, support, resistance, current_break, state)
+    avg_range = recent_average_range(m5, 10)
+    break_span = max(abs(resistance - support), avg_range)
+    zone_half_width = min(max(avg_range * 0.35, 0.6), max(1.8, break_span * 0.6))
+    sl_buffer = max(zone_half_width * 1.25, 1.0)
+    setup = build_setup(
+        price,
+        support,
+        resistance,
+        current_break,
+        state,
+        zone_half_width=zone_half_width,
+        sl_buffer=sl_buffer,
+    )
     return {
         'price': price,
         'support': support,
@@ -207,5 +231,6 @@ def snapshot(external_price=None):
         'state': state,
         'quality': quality,
         'impulse': impulse,
+        'avg_range': round(avg_range, 2),
         'signal': setup,
     }

@@ -60,7 +60,6 @@ def process(price):
                 print(f'📡 SETUP {signal} | Area {entry_low}-{entry_high}')
                 send_setup(data)
                 return
-            active_setup = data
 
     if not current_area or not active_setup:
         return
@@ -72,13 +71,20 @@ def process(price):
 
     low, high = current_area
     mid = (low + high) / 2
+    touch_buffer = signal_data.get('touch_buffer', max((high - low) * 0.5, 0.25))
+    trigger_low = low - touch_buffer
+    trigger_high = high + touch_buffer
     if last_tick_price is not None:
         diff = abs(price - last_tick_price)
         stall_count = stall_count + 1 if diff < 0.3 else 0
     last_tick_price = price
-    if not entry_triggered and low <= price <= high:
-        if abs(price - mid) > ((high - low) * 0.6):
-            print(f'[ENTRY BLOCKED] edge area | price={price} mid={mid} low={low} high={high}')
+    if not entry_triggered and trigger_low <= price <= trigger_high:
+        effective_band = ((high - low) * 0.8) + touch_buffer
+        if abs(price - mid) > effective_band:
+            print(
+                f'[ENTRY BLOCKED] edge area | price={price} mid={mid} '
+                f'trigger_low={trigger_low} trigger_high={trigger_high}'
+            )
             return
         if not valid_entry(signal, price, last_price):
             print(f'[ENTRY BLOCKED] valid_entry failed | signal={signal} price={price} last_price={last_price}')
@@ -105,6 +111,7 @@ def process(price):
                 'break': active_setup.get('break'),
                 'state': active_setup.get('state'),
                 'impulse': active_setup.get('impulse'),
+                'avg_range': active_setup.get('avg_range'),
             },
             'result': 'open',
         })
