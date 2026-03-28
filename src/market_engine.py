@@ -1,3 +1,4 @@
+import copy
 import json
 import os
 
@@ -8,20 +9,85 @@ load_dotenv()
 API_KEY = os.getenv('TWELVE_API_KEY')
 BASE_URL = 'https://api.twelvedata.com/time_series'
 SYMBOL = 'XAU/USD'
+DEFAULT_PROFILE_FILTERS = {
+    'BUY_UPTREND': {
+        'enabled': False,
+        'min_setup_quality': 6,
+        'min_confirmation_score': 4,
+        'max_setup_age_bars': 8,
+        'depth_min': 0.18,
+        'depth_max': 0.85,
+        'required_stall': 1,
+        'require_reclaim': True,
+    },
+    'SELL_DOWNTREND': {
+        'enabled': True,
+        'min_setup_quality': 5,
+        'min_confirmation_score': 3,
+        'max_setup_age_bars': 10,
+        'depth_min': 0.18,
+        'depth_max': 0.90,
+        'required_stall': 0,
+        'require_reclaim': True,
+    },
+    'BUY_RANGE': {
+        'enabled': False,
+        'min_setup_quality': 6,
+        'min_confirmation_score': 4,
+        'max_setup_age_bars': 6,
+        'depth_min': 0.20,
+        'depth_max': 0.80,
+        'required_stall': 1,
+        'require_reclaim': True,
+    },
+    'SELL_RANGE': {
+        'enabled': True,
+        'min_setup_quality': 5,
+        'min_confirmation_score': 4,
+        'max_setup_age_bars': 6,
+        'depth_min': 0.20,
+        'depth_max': 0.85,
+        'required_stall': 1,
+        'require_reclaim': True,
+    },
+}
 DEFAULT_CONFIG = {
     'use_retest': True,
     'use_impulse': False,
     'allow_counter': False,
     'min_rr': 2.0,
+    'profile_filters': DEFAULT_PROFILE_FILTERS,
 }
 
 
 def load_config():
+    merged = copy.deepcopy(DEFAULT_CONFIG)
     try:
         with open('config.json', 'r', encoding='utf-8') as f:
-            return json.load(f)
+            raw = json.load(f)
     except Exception:
-        return DEFAULT_CONFIG.copy()
+        return merged
+
+    for key, value in raw.items():
+        if key == 'profile_filters' and isinstance(value, dict):
+            continue
+        merged[key] = value
+
+    user_profiles = raw.get('profile_filters', {}) if isinstance(raw, dict) else {}
+    for profile_key, overrides in user_profiles.items():
+        base = merged['profile_filters'].get(profile_key, {}).copy()
+        if isinstance(overrides, dict):
+            base.update(overrides)
+        merged['profile_filters'][profile_key] = base
+    return merged
+
+
+def get_profile_key(signal, structure_tf):
+    return f'{signal}_{structure_tf}'
+
+
+def get_profile_rules(config, profile_key):
+    return copy.deepcopy(config.get('profile_filters', {}).get(profile_key, {}))
 
 
 def get_candles(tf='5min', limit=200):
@@ -291,5 +357,6 @@ def snapshot(external_price=None):
         'avg_range': round(avg_range, 2),
         'setup_quality_score': quality_score,
         'setup_quality_tags': quality_tags,
+        'profile_rules': get_profile_rules(config, get_profile_key(setup.get('signal'), structure_tf)) if setup.get('signal') else {},
         'signal': setup,
     }

@@ -15,6 +15,8 @@ from src.market_engine import (
     candle_metrics,
     candle_quality,
     detect_break,
+    get_profile_key,
+    get_profile_rules,
     get_state,
     is_trend_aligned,
     load_config,
@@ -161,6 +163,7 @@ def snapshot_from_bars(m5: list[dict[str, Any]], m15: list[dict[str, Any]]) -> d
         zone_half_width=zone_half_width,
         sl_buffer=sl_buffer,
     )
+    profile_key = get_profile_key(setup.get('signal'), structure_tf) if setup.get('signal') else None
     return {
         'timestamp': m5[-1]['datetime'].isoformat(),
         'price': price,
@@ -174,6 +177,8 @@ def snapshot_from_bars(m5: list[dict[str, Any]], m15: list[dict[str, Any]]) -> d
         'avg_range': round(avg_range, 2),
         'setup_quality_score': quality_score,
         'setup_quality_tags': quality_tags,
+        'profile_key': profile_key,
+        'profile_rules': get_profile_rules(config, profile_key) if profile_key else {},
         'signal': setup,
     }
 
@@ -221,10 +226,6 @@ def record_blocker(
     blocker_examples.setdefault(name, [])
     if len(blocker_examples[name]) < 5:
         blocker_examples[name].append(payload)
-
-
-def get_profile_key(signal: str, structure_tf: str) -> str:
-    return f'{signal}_{structure_tf}'
 
 
 def ensure_profile_bucket(profile_stats: dict[str, Any], profile_key: str) -> dict[str, Any]:
@@ -299,7 +300,7 @@ def is_momentum_followthrough(candle: dict[str, Any], signal: str, avg_range: fl
     return metrics['bearish'] and metrics['body'] >= min_body and metrics['body_ratio'] >= 0.45
 
 
-def get_stall_rules(active_setup: dict[str, Any], signal: str) -> dict[str, Any]:
+def get_stall_rules(active_setup: dict[str, Any], signal: str, profile_rules: dict[str, Any]) -> dict[str, Any]:
     avg_range = max(float(active_setup.get('avg_range') or 0.5), 0.5)
     structure_tf = active_setup.get('structure') or 'RANGE'
     setup_quality = int(active_setup.get('setup_quality_score') or 0)
@@ -312,6 +313,7 @@ def get_stall_rules(active_setup: dict[str, Any], signal: str) -> dict[str, Any]
     required_stall = 0 if is_trend_aligned(signal, structure_tf) and impulse and setup_quality >= 4 else 1
     if structure_tf == 'RANGE':
         required_stall = max(required_stall, 1)
+    required_stall = int(profile_rules.get('required_stall', required_stall))
 
     return {
         'quiet_close_threshold': quiet_close_threshold,
@@ -321,9 +323,10 @@ def get_stall_rules(active_setup: dict[str, Any], signal: str) -> dict[str, Any]
     }
 
 
-def get_confirmation_threshold(active_setup: dict[str, Any], signal: str) -> int:
+def get_confirmation_threshold(active_setup: dict[str, Any], signal: str, profile_rules: dict[str, Any]) -> int:
     structure_tf = active_setup.get('structure') or 'RANGE'
-    return 2 if is_trend_aligned(signal, structure_tf) else 3
+    default_threshold = 2 if is_trend_aligned(signal, structure_tf) else 3
+    return int(profile_rules.get('min_confirmation_score', default_threshold))
 
 
 def get_confirmation_score(
@@ -362,6 +365,7 @@ def get_confirmation_score(
 
 
 def run_simulation(limit: int = 800, output_path: str | None = None) -> SimulationResult:
+    config = load_config()
     candles_5m = get_historical_candles('5min', limit)
     open_trades: list[SimTrade] = []
     all_trades: list[SimTrade] = []
@@ -383,6 +387,8 @@ def run_simulation(limit: int = 800, output_path: str | None = None) -> Simulati
         'setup_expired': 0,
         'bad_retest_depth': 0,
         'weak_confirmation': 0,
+        'profile_disabled': 0,
+        'low_setup_quality': 0,
     }
     blocker_examples: dict[str, list[dict[str, Any]]] = {}
 
@@ -398,20 +404,42 @@ def run_simulation(limit: int = 800, output_path: str | None = None) -> Simulati
             signal = signal_data.get('signal')
             break_type = snapshot.get('break')
             if signal and signal != 'NO TRADE' and break_type:
+                profile_key = snapshot.get('profile_key') or get_profile_key(signal, snapshot.get('structure'))
+                profile_rules = get_profile_rules(config, profile_key)
                 setup_key = (
                     f"{snapshot.get('break')}_{signal}_{snapshot.get('support')}_{snapshot.get('resistance')}"
                 )
                 if setup_key != last_setup_key:
                     last_setup_key = setup_key
                     entry_triggered = False
+                    current_area = None
+                    active_setup = None
+                    stall_count = 0
+                    active_setup_age = 0
+                    setup_count += 1
+                    last_bar_close = candle['close']
+                    increment_profile_metric(profile_stats, profile_key, 'setups')
+
+                    blocker_payload = {
+                        'timestamp': candle['datetime'].isoformat(),
+                        'signal': signal,
+                        'structure': snapshot.get('structure'),
+                        'setup_quality_score': snapshot.get('setup_quality_score'),
+                        'setup_quality_tags': snapshot.get('setup_quality_tags'),
+                        'profile_key': profile_key,
+                        'profile_rules': profile_rules,
+                    }
+                    if not profile_rules.get('enabled', True):
+                        record_blocker(blocker_counts, blocker_examples, 'profile_disabled', blocker_payload)
+                        record_profile_blocker(profile_stats, profile_key, 'profile_disabled')
+                        continue
+                    if int(snapshot.get('setup_quality_score') or 0) < int(profile_rules.get('min_setup_quality', 0)):
+                        record_blocker(blocker_counts, blocker_examples, 'low_setup_quality', blocker_payload)
+                        record_profile_blocker(profile_stats, profile_key, 'low_setup_quality')
+                        continue
+
                     current_area = (signal_data['entry_low'], signal_data['entry_high'])
                     active_setup = snapshot
-                    stall_count = 0
-                    setup_count += 1
-                    active_setup_age = 0
-                    last_bar_close = candle['close']
-                    profile_key = get_profile_key(signal, snapshot.get('structure'))
-                    increment_profile_metric(profile_stats, profile_key, 'setups')
                     continue
 
         if not current_area or not active_setup:
@@ -434,9 +462,10 @@ def run_simulation(limit: int = 800, output_path: str | None = None) -> Simulati
             continue
 
         structure_tf = active_setup.get('structure') or 'RANGE'
-        profile_key = get_profile_key(signal, structure_tf)
+        profile_key = active_setup.get('profile_key') or get_profile_key(signal, structure_tf)
+        profile_rules = get_profile_rules(config, profile_key)
         active_setup_age += 1
-        max_setup_age_bars = 8 if structure_tf == 'RANGE' else 10
+        max_setup_age_bars = int(profile_rules.get('max_setup_age_bars', 8 if structure_tf == 'RANGE' else 10))
 
         low, high = current_area
         mid = (low + high) / 2
@@ -455,9 +484,11 @@ def run_simulation(limit: int = 800, output_path: str | None = None) -> Simulati
         else:
             depth = (candle['high'] - trigger_low) / band_width
         depth = round(depth, 2)
-        depth_ok = 0.12 <= depth <= 1.05
+        depth_min = float(profile_rules.get('depth_min', 0.12))
+        depth_max = float(profile_rules.get('depth_max', 1.05))
+        depth_ok = depth_min <= depth <= depth_max
 
-        rules = get_stall_rules(active_setup, signal)
+        rules = get_stall_rules(active_setup, signal, profile_rules)
         quiet_bar = (
             close_move is not None
             and close_move <= rules['quiet_close_threshold']
@@ -472,8 +503,10 @@ def run_simulation(limit: int = 800, output_path: str | None = None) -> Simulati
 
         prev_candle = window_5m[-2] if len(window_5m) >= 2 else candle
         confirmation_score, confirmation_tags = get_confirmation_score(prev_candle, candle, active_setup, low, high)
-        confirmation_needed = get_confirmation_threshold(active_setup, signal)
-        confirmation_ok = confirmation_score >= confirmation_needed
+        confirmation_needed = get_confirmation_threshold(active_setup, signal, profile_rules)
+        reclaim_required = bool(profile_rules.get('require_reclaim', False))
+        reclaim_ok = (not reclaim_required) or ('reclaim_close' in confirmation_tags)
+        confirmation_ok = confirmation_score >= confirmation_needed and reclaim_ok
         stall_ok = stall_count >= rules['required_stall']
         effective_price = min(max(candle['close'], trigger_low), trigger_high)
         centered = abs(effective_price - mid) <= (((high - low) * 0.8) + touch_buffer)
@@ -493,11 +526,15 @@ def run_simulation(limit: int = 800, output_path: str | None = None) -> Simulati
             'setup_age_bars': active_setup_age,
             'max_setup_age_bars': max_setup_age_bars,
             'retest_depth': depth,
+            'depth_min': depth_min,
+            'depth_max': depth_max,
             'confirmation_score': confirmation_score,
             'confirmation_needed': confirmation_needed,
             'confirmation_tags': confirmation_tags,
+            'reclaim_required': reclaim_required,
             'setup_quality_score': active_setup.get('setup_quality_score'),
             'setup_quality_tags': active_setup.get('setup_quality_tags'),
+            'profile_key': profile_key,
         }
 
         if not entry_triggered and active_setup_age > max_setup_age_bars:
@@ -558,10 +595,11 @@ def run_simulation(limit: int = 800, output_path: str | None = None) -> Simulati
                     'confirmation_score': confirmation_score,
                     'confirmation_tags': confirmation_tags,
                     'profile_key': profile_key,
+                    'profile_rules': profile_rules,
                     'setup_age_bars': active_setup_age,
                     'retest_depth': depth,
                     'stall_count': stall_count,
-                    'simulation_note': 'Entry uses setup TTL, retest-depth filter, confirmation scoring, and adaptive stall.',
+                    'simulation_note': 'Entry uses profile-aware gating, setup TTL, retest-depth filter, confirmation scoring, and adaptive stall.',
                 },
             )
             open_trades.append(trade)
@@ -590,14 +628,14 @@ def run_simulation(limit: int = 800, output_path: str | None = None) -> Simulati
         symbol=SYMBOL,
         interval='5min->15min replay',
         bars=len(candles_5m),
-        fill_model='adaptive_confirmation_touch_replay',
+        fill_model='profile_aware_confirmation_touch_replay',
         warnings=[
             'This is not tick-accurate.',
             'No bid/ask spread, slippage, latency, or partial fills are modeled.',
             'If SL and TP are both touched in the same bar, the simulator assumes SL first.',
-            'Setups remain active after the breakout bar so retest bars can be evaluated.',
+            'Profiles can be disabled or tightened independently from config.',
             'Setups expire if the retest takes too long.',
-            'Entry requires acceptable retest depth, confirmation score, and adaptive stall when needed.',
+            'Entry requires acceptable retest depth, reclaim-aware confirmation score, and adaptive stall when needed.',
         ],
         setup_count=setup_count,
         entry_count=len(all_trades),
