@@ -12,12 +12,15 @@ from src.market_engine import (
     BASE_URL,
     SYMBOL,
     build_setup,
+    candle_metrics,
     candle_quality,
     detect_break,
     get_state,
+    is_trend_aligned,
     load_config,
     minor_structure,
     recent_average_range,
+    setup_quality_score,
     structure,
     validate_break,
 )
@@ -58,6 +61,7 @@ class SimulationResult:
     winrate: float
     blocker_counts: dict[str, int]
     blocker_examples: dict[str, list[dict[str, Any]]]
+    profile_stats: dict[str, Any]
     trades: list[dict[str, Any]]
 
 
@@ -147,6 +151,7 @@ def snapshot_from_bars(m5: list[dict[str, Any]], m15: list[dict[str, Any]]) -> d
     break_span = max(abs(resistance - support), avg_range)
     zone_half_width = min(max(avg_range * 0.35, 0.6), max(1.8, break_span * 0.6))
     sl_buffer = max(zone_half_width * 1.25, 1.0)
+    quality_score, quality_tags = setup_quality_score(current_break, structure_tf, last, prev, m5)
     setup = build_setup(
         price,
         support,
@@ -167,6 +172,8 @@ def snapshot_from_bars(m5: list[dict[str, Any]], m15: list[dict[str, Any]]) -> d
         'quality': quality,
         'impulse': impulse,
         'avg_range': round(avg_range, 2),
+        'setup_quality_score': quality_score,
+        'setup_quality_tags': quality_tags,
         'signal': setup,
     }
 
@@ -216,6 +223,144 @@ def record_blocker(
         blocker_examples[name].append(payload)
 
 
+def get_profile_key(signal: str, structure_tf: str) -> str:
+    return f'{signal}_{structure_tf}'
+
+
+def ensure_profile_bucket(profile_stats: dict[str, Any], profile_key: str) -> dict[str, Any]:
+    if profile_key not in profile_stats:
+        profile_stats[profile_key] = {
+            'setups': 0,
+            'entries': 0,
+            'wins': 0,
+            'losses': 0,
+            'open': 0,
+            'blockers': {},
+        }
+    return profile_stats[profile_key]
+
+
+def increment_profile_metric(profile_stats: dict[str, Any], profile_key: str, metric: str) -> None:
+    bucket = ensure_profile_bucket(profile_stats, profile_key)
+    bucket[metric] = bucket.get(metric, 0) + 1
+
+
+def record_profile_blocker(profile_stats: dict[str, Any], profile_key: str, blocker_name: str) -> None:
+    bucket = ensure_profile_bucket(profile_stats, profile_key)
+    bucket['blockers'][blocker_name] = bucket['blockers'].get(blocker_name, 0) + 1
+
+
+def is_pin_bar(candle: dict[str, Any], signal: str) -> bool:
+    metrics = candle_metrics(candle)
+    if signal == 'BUY':
+        return (
+            metrics['lower_wick'] >= max(metrics['body'] * 1.5, metrics['range'] * 0.35)
+            and candle['close'] >= (candle['low'] + (metrics['range'] * 0.55))
+        )
+    return (
+        metrics['upper_wick'] >= max(metrics['body'] * 1.5, metrics['range'] * 0.35)
+        and candle['close'] <= (candle['high'] - (metrics['range'] * 0.55))
+    )
+
+
+def is_engulfing(prev: dict[str, Any], candle: dict[str, Any], signal: str) -> bool:
+    prev_high_body = max(prev['open'], prev['close'])
+    prev_low_body = min(prev['open'], prev['close'])
+    curr_high_body = max(candle['open'], candle['close'])
+    curr_low_body = min(candle['open'], candle['close'])
+
+    if signal == 'BUY':
+        return (
+            prev['close'] < prev['open']
+            and candle['close'] > candle['open']
+            and curr_low_body <= prev_low_body
+            and curr_high_body >= prev_high_body
+        )
+    return (
+        prev['close'] > prev['open']
+        and candle['close'] < candle['open']
+        and curr_high_body >= prev_high_body
+        and curr_low_body <= prev_low_body
+    )
+
+
+def is_reclaim_confirmation(candle: dict[str, Any], signal: str, zone_low: float, zone_high: float) -> bool:
+    mid = (zone_low + zone_high) / 2
+    if signal == 'BUY':
+        return candle['close'] >= mid and candle['close'] > candle['open']
+    return candle['close'] <= mid and candle['close'] < candle['open']
+
+
+def is_momentum_followthrough(candle: dict[str, Any], signal: str, avg_range: float) -> bool:
+    metrics = candle_metrics(candle)
+    min_body = max(avg_range * 0.3, 0.25)
+    if signal == 'BUY':
+        return metrics['bullish'] and metrics['body'] >= min_body and metrics['body_ratio'] >= 0.45
+    return metrics['bearish'] and metrics['body'] >= min_body and metrics['body_ratio'] >= 0.45
+
+
+def get_stall_rules(active_setup: dict[str, Any], signal: str) -> dict[str, Any]:
+    avg_range = max(float(active_setup.get('avg_range') or 0.5), 0.5)
+    structure_tf = active_setup.get('structure') or 'RANGE'
+    setup_quality = int(active_setup.get('setup_quality_score') or 0)
+    impulse = bool(active_setup.get('impulse'))
+
+    quiet_close_threshold = max(round(avg_range * 0.18, 2), 0.2)
+    quiet_body_threshold = max(round(avg_range * 0.25, 2), 0.25)
+    quiet_range_threshold = max(round(avg_range * 0.9, 2), 0.6)
+
+    required_stall = 0 if is_trend_aligned(signal, structure_tf) and impulse and setup_quality >= 4 else 1
+    if structure_tf == 'RANGE':
+        required_stall = max(required_stall, 1)
+
+    return {
+        'quiet_close_threshold': quiet_close_threshold,
+        'quiet_body_threshold': quiet_body_threshold,
+        'quiet_range_threshold': quiet_range_threshold,
+        'required_stall': required_stall,
+    }
+
+
+def get_confirmation_threshold(active_setup: dict[str, Any], signal: str) -> int:
+    structure_tf = active_setup.get('structure') or 'RANGE'
+    return 2 if is_trend_aligned(signal, structure_tf) else 3
+
+
+def get_confirmation_score(
+    prev_candle: dict[str, Any],
+    candle: dict[str, Any],
+    active_setup: dict[str, Any],
+    zone_low: float,
+    zone_high: float,
+) -> tuple[int, list[str]]:
+    signal = active_setup['signal']['signal']
+    avg_range = max(float(active_setup.get('avg_range') or 0.5), 0.5)
+
+    score = 0
+    tags: list[str] = []
+
+    if is_reclaim_confirmation(candle, signal, zone_low, zone_high):
+        score += 2
+        tags.append('reclaim_close')
+    if is_pin_bar(candle, signal):
+        score += 2
+        tags.append('pin_bar')
+    if is_engulfing(prev_candle, candle, signal):
+        score += 2
+        tags.append('engulfing')
+    if is_momentum_followthrough(candle, signal, avg_range):
+        score += 1
+        tags.append('momentum_followthrough')
+    if bool(active_setup.get('impulse')):
+        score += 1
+        tags.append('impulse_breakout')
+    if int(active_setup.get('setup_quality_score') or 0) >= 4:
+        score += 1
+        tags.append('high_quality_setup')
+
+    return score, tags
+
+
 def run_simulation(limit: int = 800, output_path: str | None = None) -> SimulationResult:
     candles_5m = get_historical_candles('5min', limit)
     open_trades: list[SimTrade] = []
@@ -224,17 +369,20 @@ def run_simulation(limit: int = 800, output_path: str | None = None) -> Simulati
     current_area: tuple[float, float] | None = None
     active_setup: dict[str, Any] | None = None
     entry_triggered = False
-    last_close: float | None = None
     last_bar_close: float | None = None
     stall_count = 0
     setup_count = 0
+    active_setup_age = 0
+    profile_stats: dict[str, Any] = {}
     blocker_counts: dict[str, int] = {
         'entry_already_used': 0,
         'outside_zone': 0,
         'edge_area': 0,
-        'missing_previous_close': 0,
         'insufficient_stall': 0,
         'no_active_setup': 0,
+        'setup_expired': 0,
+        'bad_retest_depth': 0,
+        'weak_confirmation': 0,
     }
     blocker_examples: dict[str, list[dict[str, Any]]] = {}
 
@@ -259,9 +407,11 @@ def run_simulation(limit: int = 800, output_path: str | None = None) -> Simulati
                     current_area = (signal_data['entry_low'], signal_data['entry_high'])
                     active_setup = snapshot
                     stall_count = 0
-                    last_close = None
                     setup_count += 1
+                    active_setup_age = 0
                     last_bar_close = candle['close']
+                    profile_key = get_profile_key(signal, snapshot.get('structure'))
+                    increment_profile_metric(profile_stats, profile_key, 'setups')
                     continue
 
         if not current_area or not active_setup:
@@ -279,17 +429,59 @@ def run_simulation(limit: int = 800, output_path: str | None = None) -> Simulati
 
         signal_data = active_setup.get('signal', {})
         signal = signal_data.get('signal')
+        if not signal or signal == 'NO TRADE':
+            last_bar_close = candle['close']
+            continue
+
+        structure_tf = active_setup.get('structure') or 'RANGE'
+        profile_key = get_profile_key(signal, structure_tf)
+        active_setup_age += 1
+        max_setup_age_bars = 8 if structure_tf == 'RANGE' else 10
+
         low, high = current_area
         mid = (low + high) / 2
         touch_buffer = signal_data.get('touch_buffer', max((high - low) * 0.5, 0.25))
         trigger_low = low - touch_buffer
         trigger_high = high + touch_buffer
-        if last_bar_close is not None:
-            diff = abs(candle['close'] - last_bar_close)
-            stall_count = stall_count + 1 if diff < 0.3 else 0
+        band_width = max(trigger_high - trigger_low, 0.01)
+
+        close_move = abs(candle['close'] - last_bar_close) if last_bar_close is not None else None
+        body = abs(candle['close'] - candle['open'])
+        bar_range = candle['high'] - candle['low']
+        touched_zone = candle['low'] <= trigger_high and candle['high'] >= trigger_low
+
+        if signal == 'BUY':
+            depth = (trigger_high - candle['low']) / band_width
+        else:
+            depth = (candle['high'] - trigger_low) / band_width
+        depth = round(depth, 2)
+        depth_ok = 0.12 <= depth <= 1.05
+
+        rules = get_stall_rules(active_setup, signal)
+        quiet_bar = (
+            close_move is not None
+            and close_move <= rules['quiet_close_threshold']
+            and body <= rules['quiet_body_threshold']
+            and bar_range <= rules['quiet_range_threshold']
+        )
+
+        if touched_zone and quiet_bar:
+            stall_count += 1
+        elif not touched_zone:
+            stall_count = 0
+
+        prev_candle = window_5m[-2] if len(window_5m) >= 2 else candle
+        confirmation_score, confirmation_tags = get_confirmation_score(prev_candle, candle, active_setup, low, high)
+        confirmation_needed = get_confirmation_threshold(active_setup, signal)
+        confirmation_ok = confirmation_score >= confirmation_needed
+        stall_ok = stall_count >= rules['required_stall']
+        effective_price = min(max(candle['close'], trigger_low), trigger_high)
+        centered = abs(effective_price - mid) <= (((high - low) * 0.8) + touch_buffer)
+
         blocker_payload = {
             'timestamp': candle['datetime'].isoformat(),
             'signal': signal,
+            'structure': structure_tf,
             'price': candle['close'],
             'zone_low': low,
             'zone_high': high,
@@ -297,7 +489,27 @@ def run_simulation(limit: int = 800, output_path: str | None = None) -> Simulati
             'trigger_high': round(trigger_high, 2),
             'mid': round(mid, 2),
             'stall_count': stall_count,
+            'required_stall': rules['required_stall'],
+            'setup_age_bars': active_setup_age,
+            'max_setup_age_bars': max_setup_age_bars,
+            'retest_depth': depth,
+            'confirmation_score': confirmation_score,
+            'confirmation_needed': confirmation_needed,
+            'confirmation_tags': confirmation_tags,
+            'setup_quality_score': active_setup.get('setup_quality_score'),
+            'setup_quality_tags': active_setup.get('setup_quality_tags'),
         }
+
+        if not entry_triggered and active_setup_age > max_setup_age_bars:
+            record_blocker(blocker_counts, blocker_examples, 'setup_expired', blocker_payload)
+            record_profile_blocker(profile_stats, profile_key, 'setup_expired')
+            current_area = None
+            active_setup = None
+            stall_count = 0
+            active_setup_age = 0
+            last_bar_close = candle['close']
+            continue
+
         if entry_triggered:
             record_blocker(
                 blocker_counts,
@@ -305,45 +517,69 @@ def run_simulation(limit: int = 800, output_path: str | None = None) -> Simulati
                 'entry_already_used',
                 blocker_payload,
             )
-            last_close = candle['close']
+            record_profile_blocker(profile_stats, profile_key, 'entry_already_used')
             last_bar_close = candle['close']
             continue
-        touched_zone = candle['low'] <= trigger_high and candle['high'] >= trigger_low
-        effective_price = min(max(candle['close'], trigger_low), trigger_high)
-        centered = abs(effective_price - mid) <= (((high - low) * 0.8) + touch_buffer)
-        valid_price = last_close is not None
-        confirmed = stall_count >= 1
+
         if not touched_zone:
             record_blocker(blocker_counts, blocker_examples, 'outside_zone', blocker_payload)
+            record_profile_blocker(profile_stats, profile_key, 'outside_zone')
+        elif not depth_ok:
+            record_blocker(blocker_counts, blocker_examples, 'bad_retest_depth', blocker_payload)
+            record_profile_blocker(profile_stats, profile_key, 'bad_retest_depth')
         elif not centered:
             record_blocker(blocker_counts, blocker_examples, 'edge_area', blocker_payload)
-        elif not valid_price:
-            record_blocker(blocker_counts, blocker_examples, 'missing_previous_close', blocker_payload)
-        elif not confirmed:
+            record_profile_blocker(profile_stats, profile_key, 'edge_area')
+        elif not confirmation_ok:
+            record_blocker(blocker_counts, blocker_examples, 'weak_confirmation', blocker_payload)
+            record_profile_blocker(profile_stats, profile_key, 'weak_confirmation')
+        elif not stall_ok:
             record_blocker(blocker_counts, blocker_examples, 'insufficient_stall', blocker_payload)
+            record_profile_blocker(profile_stats, profile_key, 'insufficient_stall')
         else:
             entry_triggered = True
+            entry_price = round(effective_price, 2)
             trade = SimTrade(
                 opened_at=candle['datetime'].isoformat(),
                 signal=signal,
-                entry=round(mid, 2),
+                entry=entry_price,
                 entry_low=low,
                 entry_high=high,
                 sl=signal_data['sl'],
                 tp=signal_data['tp'],
                 context={
-                    'structure': active_setup.get('structure'),
+                    'structure': structure_tf,
                     'break': active_setup.get('break'),
                     'state': active_setup.get('state'),
                     'impulse': active_setup.get('impulse'),
                     'avg_range': active_setup.get('avg_range'),
-                    'simulation_note': 'Entry uses volatility-adaptive zone and touch trigger replay',
+                    'setup_quality_score': active_setup.get('setup_quality_score'),
+                    'setup_quality_tags': active_setup.get('setup_quality_tags'),
+                    'confirmation_score': confirmation_score,
+                    'confirmation_tags': confirmation_tags,
+                    'profile_key': profile_key,
+                    'setup_age_bars': active_setup_age,
+                    'retest_depth': depth,
+                    'stall_count': stall_count,
+                    'simulation_note': 'Entry uses setup TTL, retest-depth filter, confirmation scoring, and adaptive stall.',
                 },
             )
             open_trades.append(trade)
             all_trades.append(trade)
-        last_close = candle['close']
+            increment_profile_metric(profile_stats, profile_key, 'entries')
+
         last_bar_close = candle['close']
+
+    for trade in all_trades:
+        profile_key = trade.context.get('profile_key')
+        if not profile_key:
+            continue
+        if trade.result == 'win':
+            increment_profile_metric(profile_stats, profile_key, 'wins')
+        elif trade.result == 'loss':
+            increment_profile_metric(profile_stats, profile_key, 'losses')
+        else:
+            increment_profile_metric(profile_stats, profile_key, 'open')
 
     win_count = sum(1 for trade in all_trades if trade.result == 'win')
     loss_count = sum(1 for trade in all_trades if trade.result == 'loss')
@@ -354,13 +590,14 @@ def run_simulation(limit: int = 800, output_path: str | None = None) -> Simulati
         symbol=SYMBOL,
         interval='5min->15min replay',
         bars=len(candles_5m),
-        fill_model='adaptive_zone_touch_replay',
+        fill_model='adaptive_confirmation_touch_replay',
         warnings=[
             'This is not tick-accurate.',
             'No bid/ask spread, slippage, latency, or partial fills are modeled.',
             'If SL and TP are both touched in the same bar, the simulator assumes SL first.',
             'Setups remain active after the breakout bar so retest bars can be evaluated.',
-            'Entry is allowed on touch of a volatility-adaptive trigger band, not only close-inside-zone.',
+            'Setups expire if the retest takes too long.',
+            'Entry requires acceptable retest depth, confirmation score, and adaptive stall when needed.',
         ],
         setup_count=setup_count,
         entry_count=len(all_trades),
@@ -370,6 +607,7 @@ def run_simulation(limit: int = 800, output_path: str | None = None) -> Simulati
         winrate=round(winrate, 2),
         blocker_counts=blocker_counts,
         blocker_examples=blocker_examples,
+        profile_stats=profile_stats,
         trades=[asdict(trade) for trade in all_trades],
     )
     ensure_data_dir()

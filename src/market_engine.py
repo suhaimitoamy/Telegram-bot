@@ -125,6 +125,23 @@ def candle_quality(candle, prev, data):
     }
 
 
+def candle_metrics(candle):
+    body = abs(candle['close'] - candle['open'])
+    upper_wick = candle['high'] - max(candle['open'], candle['close'])
+    lower_wick = min(candle['open'], candle['close']) - candle['low']
+    total_range = max(candle['high'] - candle['low'], 0.01)
+    body_ratio = body / total_range
+    return {
+        'body': body,
+        'upper_wick': upper_wick,
+        'lower_wick': lower_wick,
+        'range': total_range,
+        'body_ratio': body_ratio,
+        'bullish': candle['close'] > candle['open'],
+        'bearish': candle['close'] < candle['open'],
+    }
+
+
 def recent_average_range(data, window=10):
     sample = data[-window:] if len(data) >= window else data
     if not sample:
@@ -141,6 +158,45 @@ def get_state(break_type, structure_tf):
     if structure_tf == 'DOWNTREND' and break_type == 'BREAK_UP':
         return 'COUNTER'
     return 'VALID'
+
+
+def is_trend_aligned(signal, structure_tf):
+    return (
+        (signal == 'BUY' and structure_tf == 'UPTREND')
+        or (signal == 'SELL' and structure_tf == 'DOWNTREND')
+    )
+
+
+def setup_quality_score(break_type, structure_tf, candle, prev, data):
+    signal = 'BUY' if break_type == 'BREAK_UP' else 'SELL'
+    quality = candle_quality(candle, prev, data)
+    metrics = candle_metrics(candle)
+    prev_metrics = candle_metrics(prev)
+    avg_range = recent_average_range(data, 10)
+
+    score = 0
+    tags = []
+
+    if quality['clean']:
+        score += 1
+        tags.append('clean_break')
+    if quality['momentum']:
+        score += 1
+        tags.append('momentum_break')
+    if metrics['body_ratio'] >= 0.55:
+        score += 1
+        tags.append('body_dominant')
+    if metrics['body'] >= max(prev_metrics['body'] * 1.1, 0.25):
+        score += 1
+        tags.append('body_expansion')
+    if metrics['range'] >= max(avg_range * 0.9, 0.5):
+        score += 1
+        tags.append('range_expansion')
+    if is_trend_aligned(signal, structure_tf):
+        score += 1
+        tags.append('trend_aligned')
+
+    return score, tags
 
 
 def build_setup(price, support, resistance, break_type, state, zone_half_width, sl_buffer):
@@ -213,6 +269,7 @@ def snapshot(external_price=None):
     break_span = max(abs(resistance - support), avg_range)
     zone_half_width = min(max(avg_range * 0.35, 0.6), max(1.8, break_span * 0.6))
     sl_buffer = max(zone_half_width * 1.25, 1.0)
+    quality_score, quality_tags = setup_quality_score(current_break, structure_tf, last, prev, m5)
     setup = build_setup(
         price,
         support,
@@ -232,5 +289,7 @@ def snapshot(external_price=None):
         'quality': quality,
         'impulse': impulse,
         'avg_range': round(avg_range, 2),
+        'setup_quality_score': quality_score,
+        'setup_quality_tags': quality_tags,
         'signal': setup,
     }
