@@ -25,6 +25,7 @@ def main():
         'loss_count': result.loss_count,
         'open_count': result.open_count,
         'winrate': result.winrate,
+        'blocker_counts': result.blocker_counts,
         'report': args.output,
         'warnings': result.warnings,
     }, indent=2))

@@ -1,5 +1,4 @@
 import json
-import os
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
@@ -56,6 +55,8 @@ class SimulationResult:
     loss_count: int
     open_count: int
     winrate: float
+    blocker_counts: dict[str, int]
+    blocker_examples: dict[str, list[dict[str, Any]]]
     trades: list[dict[str, Any]]
 
 
@@ -189,6 +190,18 @@ def update_open_trades(open_trades: list[SimTrade], candle: dict[str, Any]) -> N
                 trade.exit_reason = 'tp'
 
 
+def record_blocker(
+    blocker_counts: dict[str, int],
+    blocker_examples: dict[str, list[dict[str, Any]]],
+    name: str,
+    payload: dict[str, Any],
+) -> None:
+    blocker_counts[name] = blocker_counts.get(name, 0) + 1
+    blocker_examples.setdefault(name, [])
+    if len(blocker_examples[name]) < 5:
+        blocker_examples[name].append(payload)
+
+
 def run_simulation(limit: int = 800, output_path: str | None = None) -> SimulationResult:
     candles_5m = get_historical_candles('5min', limit)
     open_trades: list[SimTrade] = []
@@ -200,6 +213,14 @@ def run_simulation(limit: int = 800, output_path: str | None = None) -> Simulati
     last_bar_close: float | None = None
     stall_count = 0
     setup_count = 0
+    blocker_counts: dict[str, int] = {
+        'entry_already_used': 0,
+        'outside_zone': 0,
+        'edge_area': 0,
+        'missing_previous_close': 0,
+        'insufficient_stall': 0,
+    }
+    blocker_examples: dict[str, list[dict[str, Any]]] = {}
 
     for index in range(len(candles_5m)):
         window_5m = candles_5m[: index + 1]
@@ -227,7 +248,7 @@ def run_simulation(limit: int = 800, output_path: str | None = None) -> Simulati
             setup_count += 1
             last_bar_close = candle['close']
             continue
-        if not current_area or entry_triggered:
+        if not current_area:
             last_bar_close = candle['close']
             continue
         low, high = current_area
@@ -235,12 +256,39 @@ def run_simulation(limit: int = 800, output_path: str | None = None) -> Simulati
         if last_bar_close is not None:
             diff = abs(candle['close'] - last_bar_close)
             stall_count = stall_count + 1 if diff < 0.3 else 0
+        blocker_payload = {
+            'timestamp': candle['datetime'].isoformat(),
+            'signal': signal,
+            'price': candle['close'],
+            'zone_low': low,
+            'zone_high': high,
+            'mid': round(mid, 2),
+            'stall_count': stall_count,
+        }
+        if entry_triggered:
+            record_blocker(
+                blocker_counts,
+                blocker_examples,
+                'entry_already_used',
+                blocker_payload,
+            )
+            last_close = candle['close']
+            last_bar_close = candle['close']
+            continue
         touched_zone = candle['low'] <= high and candle['high'] >= low
         close_inside = low <= candle['close'] <= high
         centered = abs(candle['close'] - mid) <= ((high - low) * 0.6)
         valid_price = last_close is not None
         confirmed = stall_count >= 1
-        if touched_zone and close_inside and centered and valid_price and confirmed:
+        if not touched_zone or not close_inside:
+            record_blocker(blocker_counts, blocker_examples, 'outside_zone', blocker_payload)
+        elif not centered:
+            record_blocker(blocker_counts, blocker_examples, 'edge_area', blocker_payload)
+        elif not valid_price:
+            record_blocker(blocker_counts, blocker_examples, 'missing_previous_close', blocker_payload)
+        elif not confirmed:
+            record_blocker(blocker_counts, blocker_examples, 'insufficient_stall', blocker_payload)
+        else:
             entry_triggered = True
             trade = SimTrade(
                 opened_at=candle['datetime'].isoformat(),
@@ -285,6 +333,8 @@ def run_simulation(limit: int = 800, output_path: str | None = None) -> Simulati
         loss_count=loss_count,
         open_count=open_count,
         winrate=round(winrate, 2),
+        blocker_counts=blocker_counts,
+        blocker_examples=blocker_examples,
         trades=[asdict(trade) for trade in all_trades],
     )
     ensure_data_dir()
