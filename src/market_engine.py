@@ -140,12 +140,14 @@ def build_setup(price, support, resistance, break_type, state):
     if not config.get('allow_counter', False) and state == 'COUNTER':
         return {'signal': 'NO TRADE'}
     rr = config.get('min_rr', 2.0)
+    retest_half_width = 0.5
     if break_type == 'BREAK_UP':
-        entry_low = price - 1.0
-        entry_high = price + 0.5
+        entry_low = resistance - retest_half_width
+        entry_high = resistance + retest_half_width
         sl = support - 1.0
-        risk = entry_high - sl
-        tp = entry_high + (risk * rr)
+        entry = (entry_low + entry_high) / 2
+        risk = max(entry - sl, 0.1)
+        tp = entry + (risk * rr)
         return {
             'signal': 'BUY',
             'entry_low': round(entry_low, 2),
@@ -154,11 +156,12 @@ def build_setup(price, support, resistance, break_type, state):
             'tp': round(tp, 2),
         }
     if break_type == 'BREAK_DOWN':
-        entry_low = price - 0.5
-        entry_high = price + 1.0
+        entry_low = support - retest_half_width
+        entry_high = support + retest_half_width
         sl = resistance + 1.0
-        risk = sl - entry_low
-        tp = entry_low - (risk * rr)
+        entry = (entry_low + entry_high) / 2
+        risk = max(sl - entry, 0.1)
+        tp = entry - (risk * rr)
         return {
             'signal': 'SELL',
             'entry_low': round(entry_low, 2),

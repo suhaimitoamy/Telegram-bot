@@ -33,14 +33,16 @@ def valid_entry(signal, price, previous_price):
 
 
 def entry_confirmation(signal, price, previous_price, current_stall_count):
+    if previous_price is None:
+        return False
     if current_stall_count < 1:
         return False
     move = abs(price - previous_price)
-    if move > 0.7:
+    if move > 1.0:
         return False
-    if signal == 'BUY' and price > previous_price:
+    if signal == 'BUY' and price >= previous_price:
         return True
-    if signal == 'SELL' and price < previous_price:
+    if signal == 'SELL' and price <= previous_price:
         return True
     return False
 
@@ -61,7 +63,7 @@ def process(price):
     break_type = data.get('break')
     if not break_type:
         return
-    setup_key = f'{break_type}_{entry_low}_{entry_high}'
+    setup_key = f"{break_type}_{signal}_{data.get('support')}_{data.get('resistance')}"
     if setup_key != last_setup_key:
         last_setup_key = setup_key
         entry_triggered = False
@@ -77,7 +79,7 @@ def process(price):
     mid = (low + high) / 2
     if last_tick_price is not None:
         diff = abs(price - last_tick_price)
-        stall_count = stall_count + 1 if diff < 0.2 else 0
+        stall_count = stall_count + 1 if diff < 0.3 else 0
     last_tick_price = price
     if not entry_triggered and low <= price <= high:
         if abs(price - mid) > ((high - low) * 0.6):
@@ -118,7 +120,7 @@ def on_message(ws, message):
         if last_price is None:
             last_price = price
             return
-        if abs(price - last_price) < 0.1:
+        if abs(price - last_price) < 0.05:
             return
         update_results(price)
         process(price)
