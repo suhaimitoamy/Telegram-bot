@@ -1,138 +1,53 @@
 import json
 import os
 import time
+from datetime import datetime
 
 import websocket
 from dotenv import load_dotenv
 
-from src.market_engine import snapshot
-from src.telegram_bot import send_entry, send_setup
-from src.trade_memory import log_trade
-from src.tracker import update_results
+from src.structure_notifier import update_runtime_with_tick
+from src.telegram_bot import (
+    send_break_alert,
+    send_continuation_alert,
+    send_failure_alert,
+    send_retest_alert,
+    send_status_alert,
+)
 
 load_dotenv()
 API_KEY = os.getenv('TWELVE_API_KEY')
 
-last_price = None
-last_setup_key = None
-entry_triggered = False
-current_area = None
-active_setup = None
+runtime_state = None
 running = True
-last_tick_price = None
-stall_count = 0
 
 
-def valid_entry(signal, price, previous_price):
-    if previous_price is None:
-        return False
-    return True
-
-
-def entry_confirmation(signal, price, previous_price, current_stall_count):
-    if previous_price is None:
-        return False
-    if current_stall_count < 1:
-        return False
-    return True
-
-
-def process(price):
-    global last_setup_key, entry_triggered, current_area, active_setup
-    global last_tick_price, stall_count
-
-    data = snapshot(external_price=price)
-    if data:
-        signal_data = data.get('signal', {})
-        signal = signal_data.get('signal')
-        break_type = data.get('break')
-        if signal and signal != 'NO TRADE' and break_type:
-            entry_low = signal_data.get('entry_low')
-            entry_high = signal_data.get('entry_high')
-            setup_key = f"{break_type}_{signal}_{data.get('support')}_{data.get('resistance')}"
-            if setup_key != last_setup_key:
-                last_setup_key = setup_key
-                entry_triggered = False
-                current_area = (entry_low, entry_high)
-                active_setup = data
-                stall_count = 0
-                last_tick_price = None
-                print(f'📡 SETUP {signal} | Area {entry_low}-{entry_high}')
-                send_setup(data)
-                return
-
-    if not current_area or not active_setup:
-        return
-
-    signal_data = active_setup.get('signal', {})
-    signal = signal_data.get('signal')
-    if not signal or signal == 'NO TRADE':
-        return
-
-    low, high = current_area
-    mid = (low + high) / 2
-    touch_buffer = signal_data.get('touch_buffer', max((high - low) * 0.5, 0.25))
-    trigger_low = low - touch_buffer
-    trigger_high = high + touch_buffer
-    if last_tick_price is not None:
-        diff = abs(price - last_tick_price)
-        stall_count = stall_count + 1 if diff < 0.3 else 0
-    last_tick_price = price
-    if not entry_triggered and trigger_low <= price <= trigger_high:
-        effective_band = ((high - low) * 0.8) + touch_buffer
-        if abs(price - mid) > effective_band:
-            print(
-                f'[ENTRY BLOCKED] edge area | price={price} mid={mid} '
-                f'trigger_low={trigger_low} trigger_high={trigger_high}'
-            )
-            return
-        if not valid_entry(signal, price, last_price):
-            print(f'[ENTRY BLOCKED] valid_entry failed | signal={signal} price={price} last_price={last_price}')
-            return
-        if not entry_confirmation(signal, price, last_price, stall_count):
-            print(
-                f'[ENTRY BLOCKED] confirmation failed | signal={signal} price={price} '
-                f'last_price={last_price} stall={stall_count}'
-            )
-            return
-        entry_triggered = True
-        print(f'🚀 ENTRY TRIGGERED {signal} @ {price}')
-        send_entry(active_setup)
-        entry = round(mid, 2)
-        log_trade({
-            'signal': signal,
-            'entry': entry,
-            'entry_low': low,
-            'entry_high': high,
-            'sl': signal_data.get('sl'),
-            'tp': signal_data.get('tp'),
-            'context': {
-                'structure': active_setup.get('structure'),
-                'break': active_setup.get('break'),
-                'state': active_setup.get('state'),
-                'impulse': active_setup.get('impulse'),
-                'avg_range': active_setup.get('avg_range'),
-            },
-            'result': 'open',
-        })
+def dispatch_event(event):
+    event_type = event.get('type')
+    if event_type == 'status':
+        send_status_alert(event.get('message', 'Notifier status update'))
+    elif event_type == 'swing_break':
+        send_break_alert(event)
+    elif event_type == 'retest_watch':
+        send_retest_alert(event)
+    elif event_type == 'continuation_no_retest':
+        send_continuation_alert(event)
+    elif event_type == 'break_failed':
+        send_failure_alert(event)
 
 
 def on_message(ws, message):
-    global last_price
+    global runtime_state
     try:
         data = json.loads(message)
         if 'price' not in data:
             return
         price = float(data['price'])
-        print(f'💰 {price}')
-        if last_price is None:
-            last_price = price
-            return
-        if abs(price - last_price) < 0.05:
-            return
-        update_results(price)
-        process(price)
-        last_price = price
+        tick_dt = datetime.now()
+        events, runtime_state = update_runtime_with_tick(runtime_state, price, tick_dt)
+        for event in events:
+            print(f"[EVENT] {event['type']} | {event}")
+            dispatch_event(event)
     except Exception as e:
         print('❌ Error:', e)
 

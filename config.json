@@ -1,1 +1,16 @@
-{"use_retest": true, "use_impulse": false, "allow_counter": false, "min_rr": 2.0}
+{
+  "use_retest": true,
+  "use_impulse": false,
+  "allow_counter": false,
+  "min_rr": 2.0,
+  "notifier": {
+    "bootstrap_bars": 240,
+    "max_candles": 400,
+    "swing_lookback": 2,
+    "retest_tolerance": 0.45,
+    "continuation_extension_atr": 1.2,
+    "no_retest_bars": 4,
+    "active_break_ttl_bars": 12,
+    "recovery_gap_seconds": 420
+  }
+}
