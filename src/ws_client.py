@@ -38,6 +38,10 @@ runtime: dict[str, Any] = {
     "last_session": None,
     "sent_event_keys": set(),
     "last_caution_key": None,
+    "news_state": {
+        "last_fetch_at": None,
+        "cached_events": [],
+    },
     "asia_range": {
         "date": None,
         "high": None,
@@ -106,6 +110,10 @@ def reset_intraday_runtime() -> None:
     runtime["last_session"] = None
     runtime["sent_event_keys"] = set()
     runtime["last_caution_key"] = None
+    runtime["news_state"] = {
+        "last_fetch_at": None,
+        "cached_events": [],
+    }
     runtime["asia_range"] = {
         "date": None,
         "high": None,
@@ -127,7 +135,7 @@ def bootstrap() -> None:
 
 
 def maybe_send_news_events(now: datetime) -> None:
-    events = process_news_events(now, runtime["config"], runtime["sent_event_keys"])
+    events = process_news_events(now, runtime["config"], runtime["sent_event_keys"], runtime["news_state"])
     for item in events:
         if item["kind"] == "result":
             send_news_result(
@@ -409,6 +417,7 @@ def on_message(ws: websocket.WebSocketApp, message: str) -> None:
             return
 
         now = datetime.now()
+        maybe_send_news_events(now)
         if not is_market_open(now, runtime["config"]["market_hours"]):
             return
 
@@ -441,8 +450,8 @@ def run_ws() -> None:
     while True:
         runtime["config"] = load_config()
         now = datetime.now()
+        maybe_send_news_events(now)
         if not is_market_open(now, runtime["config"]["market_hours"]):
-            maybe_send_news_events(now)
             notice_key = now.strftime("%Y-%m-%d-%H")
             if runtime["last_closed_notice_key"] != notice_key:
                 runtime["last_closed_notice_key"] = notice_key
