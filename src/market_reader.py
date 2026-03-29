@@ -130,9 +130,8 @@ def build_market_read(
         return {
             "state": "lower_bounce_confirmed",
             "message": (
-                f"Market sedang menguji support {format_price(lower_decision)}. "
-                f"Level bawah bertahan dan bounce terkonfirmasi. "
-                f"Skenario aktif: buy bounce selama harga bertahan di atas {format_price(lower_decision)}."
+                f"Harga berhasil bertahan di area support minor {format_price(lower_decision)} dan mulai memantul naik. "
+                f"Selama harga tetap di atas level ini, peluang naik masih layak diperhatikan."
             ),
         }
 
@@ -140,8 +139,8 @@ def build_market_read(
         return {
             "state": "lower_breakdown_confirmed",
             "message": (
-                f"Market menembus support {format_price(lower_decision)} dengan breakout valid. "
-                f"Skenario aktif: sell continuation selama harga tetap di bawah {format_price(lower_decision)}."
+                f"Harga menembus support minor {format_price(lower_decision)} dengan penembusan yang valid. "
+                f"Selama harga tetap di bawah level ini, tekanan turun masih dominan."
             ),
         }
 
@@ -149,8 +148,8 @@ def build_market_read(
         return {
             "state": "upper_rejection_confirmed",
             "message": (
-                f"Market sedang menguji supply {format_price(upper_supply)} dan rejection terkonfirmasi. "
-                f"Skenario aktif: sell reaction selama harga gagal bertahan di atas {format_price(upper_supply)}."
+                f"Harga menyentuh resistance minor {format_price(upper_supply)} lalu ditolak turun. "
+                f"Selama harga belum mampu bertahan di atas level ini, area atas masih rawan tekanan jual."
             ),
         }
 
@@ -158,8 +157,8 @@ def build_market_read(
         return {
             "state": "upper_breakout_confirmed",
             "message": (
-                f"Market berhasil menembus {format_price(upper_breakout)} dengan breakout valid. "
-                f"Skenario aktif: buy breakout selama harga bertahan di atas {format_price(upper_breakout)}."
+                f"Harga berhasil menembus resistance penting {format_price(upper_breakout)} dengan penembusan yang valid. "
+                f"Selama harga bertahan di atas level ini, peluang naik masih terbuka."
             ),
         }
 
@@ -168,11 +167,11 @@ def build_market_read(
         return {
             "state": "near_lower_range",
             "message": (
-                f"Market sedang berada dekat batas bawah range. "
-                f"Area bawah {format_price(lower_decision)} adalah level keputusan: "
-                f"bertahan = buy bounce, jebol = sell continuation. "
-                f"Area atas {format_price(upper_supply)} adalah supply sell, "
-                f"sedangkan {format_price(upper_breakout)} adalah trigger breakout buy bila tertembus valid."
+                f"Harga sedang mendekati area support minor {format_price(lower_decision)}. "
+                f"Jika level ini bertahan, harga berpeluang memantul naik. "
+                f"Jika level ini ditembus, tekanan turun bisa berlanjut.\n\n"
+                f"Resistance minor terdekat berada di {format_price(upper_supply)}, "
+                f"sedangkan {format_price(upper_breakout)} adalah level penting yang perlu ditembus untuk membuka peluang naik yang lebih kuat."
             ),
         }
 
@@ -180,9 +179,9 @@ def build_market_read(
         return {
             "state": "upper_supply_zone",
             "message": (
-                f"Area atas {format_price(upper_supply)} adalah supply sell. "
-                f"Selama belum ada breakout valid ke atas, zona ini tetap layak dipantau sebagai area reaksi turun. "
-                f"Trigger breakout buy berada di {format_price(upper_breakout)}."
+                f"Harga sedang mendekati resistance minor {format_price(upper_supply)}. "
+                f"Jika gagal menembus area ini, harga berisiko tertahan atau berbalik turun. "
+                f"Jika mampu menembus dengan kuat, target perhatian berikutnya adalah {format_price(upper_breakout)}."
             ),
         }
 
@@ -190,9 +189,8 @@ def build_market_read(
         return {
             "state": "upper_breakout_watch",
             "message": (
-                f"Level {format_price(upper_breakout)} adalah trigger breakout buy. "
-                f"Buy breakout hanya valid jika candle close kuat di atas level ini, "
-                f"bukan sekadar wick atau spike sesaat."
+                f"Harga sedang mendekati resistance penting {format_price(upper_breakout)}. "
+                f"Kenaikan baru dianggap kuat jika candle mampu ditutup jelas di atas level ini, bukan hanya lewat sesaat."
             ),
         }
 
@@ -200,17 +198,15 @@ def build_market_read(
         return {
             "state": "extreme_upper_zone",
             "message": (
-                f"Harga sudah mencapai area ekstrem atas {format_price(upper_extreme)}. "
-                f"Zona ini rawan overextension, jadi tunggu reaksi market dengan disiplin dan jangan mengejar candle."
+                f"Harga sudah masuk area atas {format_price(upper_extreme)}. "
+                f"Zona ini rawan pergerakan berlebihan, jadi hindari mengejar harga tanpa konfirmasi yang jelas."
             ),
         }
 
     return {
         "state": "neutral",
         "message": (
-            f"Market masih berada di dalam range. "
-            f"Support keputusan: {format_price(lower_decision)}. "
-            f"Supply atas: {format_price(upper_supply)}. "
-            f"Trigger breakout buy: {format_price(upper_breakout)}."
+            f"Harga masih bergerak di antara support minor {format_price(lower_decision)} dan resistance minor {format_price(upper_supply)}. "
+            f"Level penting di atas berada di {format_price(upper_breakout)}."
         ),
     }

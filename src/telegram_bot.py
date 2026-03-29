@@ -8,15 +8,15 @@ from src.config import get_env
 
 
 STATE_LABELS = {
-    "near_lower_range": "Dekat batas bawah range",
-    "lower_bounce_confirmed": "Bounce bawah terkonfirmasi",
-    "lower_breakdown_confirmed": "Breakdown bawah terkonfirmasi",
-    "upper_supply_zone": "Masuk area supply atas",
-    "upper_rejection_confirmed": "Rejection supply terkonfirmasi",
-    "upper_breakout_watch": "Pantau breakout atas",
-    "upper_breakout_confirmed": "Breakout atas terkonfirmasi",
-    "extreme_upper_zone": "Area ekstrem atas",
-    "neutral": "Range netral",
+    "near_lower_range": "Dekat support minor",
+    "lower_bounce_confirmed": "Pantulan dari support minor",
+    "lower_breakdown_confirmed": "Support minor ditembus",
+    "upper_supply_zone": "Dekat resistance minor",
+    "upper_rejection_confirmed": "Tertolak dari resistance minor",
+    "upper_breakout_watch": "Pantau penembusan resistance penting",
+    "upper_breakout_confirmed": "Resistance penting berhasil ditembus",
+    "extreme_upper_zone": "Masuk area atas",
+    "neutral": "Netral",
 }
 
 
@@ -71,6 +71,6 @@ def send_market_read(state: str, price: float, message: str) -> bool:
         "──────────────────\n"
         f"{message}\n"
         "──────────────────\n"
-        "⚠️ Eksekusi tetap manual. Tunggu konfirmasi market."
+        "⚠️ Keputusan entry tetap manual. Tunggu konfirmasi market."
     )
     return _post(msg)
