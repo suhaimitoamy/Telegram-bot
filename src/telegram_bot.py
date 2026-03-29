@@ -1,74 +1,54 @@
-import os
+from __future__ import annotations
+
 from datetime import datetime
 
 import requests
-from dotenv import load_dotenv
 
-load_dotenv()
-BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
-CHAT_ID = os.getenv('TELEGRAM_CHAT_ID')
-URL = f'https://api.telegram.org/bot{BOT_TOKEN}/sendMessage' if BOT_TOKEN else None
+from src.config import get_env
 
 
-def now():
-    return datetime.now().strftime('%H:%M WIB')
+def now_wib() -> str:
+    return datetime.now().strftime("%H:%M WIB")
 
 
-def _post(message):
-    if not URL or not CHAT_ID:
-        print('Telegram config missing')
-        return
+def _post(message: str) -> bool:
+    bot_token = get_env("TELEGRAM_BOT_TOKEN")
+    chat_id = get_env("TELEGRAM_CHAT_ID")
+    if not bot_token or not chat_id:
+        print("Telegram config missing")
+        return False
+
+    url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
     try:
-        requests.post(URL, json={'chat_id': CHAT_ID, 'text': message}, timeout=10)
-    except Exception as e:
-        print('Telegram error:', e)
+        response = requests.post(
+            url,
+            json={"chat_id": chat_id, "text": message},
+            timeout=15,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        if not payload.get("ok", False):
+            print(f"Telegram rejected message: {payload}")
+            return False
+        return True
+    except Exception as exc:
+        print(f"Telegram error: {exc}")
+        return False
 
 
-def send_setup(data):
-    sig = data.get('signal', {})
-    if sig.get('signal') == 'NO TRADE':
-        return
-    msg = f"""
-📡 SETUP DETECTED
-🕒 {now()}
-📍 Direction : {sig['signal']}
-📦 Area      : {sig['entry_low']} - {sig['entry_high']}
-━━━━━━━━━━━━━━━━━━
-📈 Bias  : {data['structure']}
-⚡ Break : {data['break']}
-🧠 State : {data['state']}
-⏳ Tunggu price masuk area
-"""
-    _post(msg)
+def send_status(text: str) -> bool:
+    msg = f"ℹ️ BOT STATUS\n🕒 {now_wib()}\n{text}"
+    return _post(msg)
 
 
-def send_entry(data):
-    sig = data.get('signal', {})
-    if sig.get('signal') == 'NO TRADE':
-        return
-    msg = f"""
-🚀 ENTRY TRIGGER
-🕒 {now()}
-📍 Signal : {sig['signal']}
-📦 Area   : {sig['entry_low']} - {sig['entry_high']}
-🛑 SL     : {sig['sl']}
-🎯 TP     : {sig['tp']}
-━━━━━━━━━━━━━━━━━━
-📈 Bias  : {data['structure']}
-⚡ Break : {data['break']}
-⚠️ Harga sudah masuk area
-"""
-    _post(msg)
-
-
-def send_news(text, news_type='MARKET', indo=None):
-    if news_type == 'ECONOMIC':
-        header = '🟥 ECONOMIC NEWS'
-    elif news_type == 'GEOPOLITICAL':
-        header = '🌍 GEOPOLITICAL NEWS'
-    else:
-        header = '📰 MARKET NEWS'
-    body = f"{header}\n🕒 {now()}\n{text}"
-    if indo:
-        body += f"\n🇮🇩 {indo}"
-    _post(body)
+def send_market_read(state: str, price: float, message: str) -> bool:
+    msg = (
+        "📡 MARKET READ\n"
+        f"🕒 {now_wib()}\n"
+        f"💰 Price: {price:,.3f}\n"
+        f"🧠 State: {state}\n"
+        f"📝 {message}\n"
+        "━━━━━━━━━━━━━━━━━━\n"
+        "⚠️ Entry tetap manual. Tunggu konfirmasi market."
+    )
+    return _post(msg)

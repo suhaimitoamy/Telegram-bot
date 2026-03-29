@@ -1,1 +1,19 @@
-{"use_retest": true, "use_impulse": false, "allow_counter": false, "min_rr": 2.0}
+{
+  "symbol": "XAU/USD",
+  "timeframe": "5min",
+  "bootstrap_bars": 160,
+  "logic": {
+    "near_buffer": 12.0,
+    "bounce_min_reclaim": 1.0,
+    "min_body_ratio": 0.5,
+    "max_history": 300,
+    "min_tick_change": 0.1
+  },
+  "levels": {
+    "lower_decision": 4485.855,
+    "tp_mid": 4508.902,
+    "upper_supply": 4528.902,
+    "upper_breakout": 4540.000,
+    "upper_extreme": 4555.510
+  }
+}
