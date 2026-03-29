@@ -7,8 +7,8 @@ import requests
 from src.config import get_env
 
 
-def now_wib() -> str:
-    return datetime.now().strftime("%H:%M WIB")
+def now_wita() -> str:
+    return datetime.now().strftime("%H:%M WITA")
 
 
 def _post(message: str) -> bool:
@@ -37,14 +37,14 @@ def _post(message: str) -> bool:
 
 
 def send_status(text: str) -> bool:
-    msg = f"ℹ️ BOT STATUS\n🕒 {now_wib()}\n{text}"
+    msg = f"ℹ️ BOT STATUS\n🕒 {now_wita()}\n{text}"
     return _post(msg)
 
 
 def send_market_read(state: str, price: float, message: str) -> bool:
     msg = (
         "📡 MARKET READ\n"
-        f"🕒 {now_wib()}\n"
+        f"🕒 {now_wita()}\n"
         f"💰 Price: {price:,.3f}\n"
         f"🧠 State: {state}\n"
         f"📝 {message}\n"
