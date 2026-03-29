@@ -9,6 +9,40 @@
     "max_history": 300,
     "min_tick_change": 0.1
   },
+  "market_hours": {
+    "monday_open": "06:00"
+  },
+  "sessions": {
+    "asia": {
+      "label": "Asia",
+      "start": "06:00",
+      "end": "14:00"
+    },
+    "pre_london": {
+      "label": "Pre-London",
+      "start": "14:00",
+      "end": "15:00"
+    },
+    "london": {
+      "label": "London",
+      "start": "15:00",
+      "end": "20:00"
+    },
+    "pre_new_york": {
+      "label": "Pre-New York",
+      "start": "20:00",
+      "end": "21:30"
+    },
+    "new_york": {
+      "label": "New York",
+      "start": "21:30",
+      "end": "01:00"
+    }
+  },
+  "session_warnings": {
+    "london_open_minutes": [30, 15],
+    "new_york_open_minutes": [30, 15]
+  },
   "levels": {
     "lower_decision": 4485.855,
     "tp_mid": 4508.902,

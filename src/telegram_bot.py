@@ -62,6 +62,15 @@ def send_status(text: str) -> bool:
     return _post(msg)
 
 
+def send_market_closed(text: str) -> bool:
+    msg = (
+        "⏸️ MARKET CLOSED\n"
+        f"🕒 {now_wita()}\n"
+        f"{text}"
+    )
+    return _post(msg)
+
+
 def send_market_read(state: str, price: float, message: str) -> bool:
     msg = (
         "📡 MARKET READ\n"
@@ -72,5 +81,35 @@ def send_market_read(state: str, price: float, message: str) -> bool:
         f"{message}\n"
         "──────────────────\n"
         "⚠️ Keputusan entry tetap manual. Tunggu konfirmasi market."
+    )
+    return _post(msg)
+
+
+def send_session_info(title: str, text: str) -> bool:
+    msg = (
+        f"🕒 {title}\n"
+        f"🕒 {now_wita()}\n"
+        "──────────────────\n"
+        f"{text}"
+    )
+    return _post(msg)
+
+
+def send_liquidity_alert(title: str, text: str) -> bool:
+    msg = (
+        f"💧 {title}\n"
+        f"🕒 {now_wita()}\n"
+        "──────────────────\n"
+        f"{text}"
+    )
+    return _post(msg)
+
+
+def send_caution(text: str) -> bool:
+    msg = (
+        "⚠️ MARKET CAUTION\n"
+        f"🕒 {now_wita()}\n"
+        "──────────────────\n"
+        f"{text}"
     )
     return _post(msg)
