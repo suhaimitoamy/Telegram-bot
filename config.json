@@ -43,6 +43,24 @@
     "london_open_minutes": [30, 15],
     "new_york_open_minutes": [30, 15]
   },
+  "news_settings": {
+    "pre_alert_minutes": [60, 30, 15, 5],
+    "post_alert_minutes": [10]
+  },
+  "news_events": [
+    {
+      "id": "cpi_example",
+      "name": "CPI m/m",
+      "kind": "inflation",
+      "impact": "high",
+      "release_time": "2026-03-31 20:30",
+      "before": "0.3%",
+      "forecast": "0.2%",
+      "actual": "",
+      "currency": "USD",
+      "notes": "Isi actual saat data resmi keluar."
+    }
+  ],
   "levels": {
     "lower_decision": 4485.855,
     "tp_mid": 4508.902,

@@ -10,9 +10,9 @@ import websocket
 
 from src.config import get_env, load_config
 from src.market_reader import build_market_read, breakout_valid
+from src.news_engine import process_news_events
 from src.session_engine import (
     get_current_session,
-    get_session_label,
     is_market_open,
     minutes_until_session,
     session_transition_message,
@@ -22,6 +22,8 @@ from src.telegram_bot import (
     send_liquidity_alert,
     send_market_closed,
     send_market_read,
+    send_news_alert,
+    send_news_result,
     send_session_info,
     send_status,
 )
@@ -122,6 +124,22 @@ def bootstrap() -> None:
     runtime["live_bucket"] = None
     reset_intraday_runtime()
     runtime["bootstrapped"] = True
+
+
+def maybe_send_news_events(now: datetime) -> None:
+    events = process_news_events(now, runtime["config"], runtime["sent_event_keys"])
+    for item in events:
+        if item["kind"] == "result":
+            send_news_result(
+                event_name=item["event_name"],
+                before=item["before"],
+                forecast=item["forecast"],
+                actual=item["actual"],
+                verdict=item["verdict"],
+                reason=item["reason"],
+            )
+        else:
+            send_news_alert(item["title"], item["message"])
 
 
 def maybe_send_read(price: float) -> None:
@@ -326,6 +344,7 @@ def handle_tick(price: float, tick_dt: datetime) -> None:
     live_bucket = runtime["live_bucket"]
 
     maybe_send_session_events(tick_dt, price)
+    maybe_send_news_events(tick_dt)
 
     if live_bucket is None:
         runtime["live_bucket"] = {
@@ -369,7 +388,7 @@ def handle_tick(price: float, tick_dt: datetime) -> None:
 def on_open(ws: websocket.WebSocketApp) -> None:
     config = runtime["config"]
     print("WS connected")
-    send_status("Bot live reader aktif. Menunggu market read, session info, dan liquidity alert berikutnya.")
+    send_status("Bot live reader aktif. Menunggu market read, session info, liquidity alert, dan news alert berikutnya.")
     ws.send(
         json.dumps(
             {
@@ -423,6 +442,7 @@ def run_ws() -> None:
         runtime["config"] = load_config()
         now = datetime.now()
         if not is_market_open(now, runtime["config"]["market_hours"]):
+            maybe_send_news_events(now)
             notice_key = now.strftime("%Y-%m-%d-%H")
             if runtime["last_closed_notice_key"] != notice_key:
                 runtime["last_closed_notice_key"] = notice_key
@@ -437,6 +457,7 @@ def run_ws() -> None:
         if not runtime["bootstrapped"]:
             bootstrap()
             send_status("Bootstrap candle berhasil dimuat. Bot sedang mulai koneksi websocket.")
+            maybe_send_news_events(now)
 
         try:
             ws = websocket.WebSocketApp(

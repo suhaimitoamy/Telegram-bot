@@ -113,3 +113,35 @@ def send_caution(text: str) -> bool:
         f"{text}"
     )
     return _post(msg)
+
+
+def send_news_alert(title: str, text: str) -> bool:
+    msg = (
+        f"📰 {title}\n"
+        f"🕒 {now_wita()}\n"
+        "──────────────────\n"
+        f"{text}"
+    )
+    return _post(msg)
+
+
+def send_news_result(
+    event_name: str,
+    before: str,
+    forecast: str,
+    actual: str,
+    verdict: str,
+    reason: str,
+) -> bool:
+    msg = (
+        "🟥 HIGH IMPACT NEWS\n"
+        f"🕒 {now_wita()}\n"
+        "──────────────────\n"
+        f"Event    : {event_name}\n"
+        f"Before   : {before or '-'}\n"
+        f"Forecast : {forecast or '-'}\n"
+        f"Actual   : {actual or '-'}\n\n"
+        f"Dampak awal : {verdict}\n"
+        f"Alasan      : {reason}"
+    )
+    return _post(msg)
