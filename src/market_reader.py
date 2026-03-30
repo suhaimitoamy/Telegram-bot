@@ -3,7 +3,9 @@ from __future__ import annotations
 from typing import Any
 
 
-def format_price(value: float) -> str:
+def format_price(value: float | None) -> str:
+    if value is None:
+        return "belum terbentuk"
     return f"{value:,.3f}"
 
 
@@ -97,116 +99,115 @@ def rejection_confirmed(
     return False
 
 
-def market_zone(price: float, levels: dict[str, float]) -> str:
-    if price <= levels["lower_decision"]:
-        return "at_lower_decision"
-    if levels["lower_decision"] < price < levels["tp_mid"]:
-        return "near_lower_range"
-    if levels["tp_mid"] <= price < levels["upper_supply"]:
-        return "mid_range"
-    if levels["upper_supply"] <= price < levels["upper_breakout"]:
-        return "at_upper_supply"
-    if levels["upper_breakout"] <= price < levels["upper_extreme"]:
-        return "breakout_zone"
-    if price >= levels["upper_extreme"]:
-        return "extreme_upper_zone"
-    return "neutral"
+def _major_levels(config: dict[str, Any]) -> list[float]:
+    raw = config.get("levels", {})
+    values: list[float] = []
+    for key in ("lower_decision", "tp_mid", "upper_supply", "upper_breakout", "upper_extreme"):
+        value = raw.get(key)
+        if value is None:
+            continue
+        try:
+            values.append(float(value))
+        except (TypeError, ValueError):
+            continue
+    return sorted(set(values))
 
 
-def build_market_read(
+def _next_major_level(price: float, config: dict[str, Any]) -> float | None:
+    for level in _major_levels(config):
+        if level > price:
+            return level
+    return None
+
+
+def build_structure_event_read(event: dict[str, Any]) -> dict[str, str]:
+    return {
+        "state": event["state"],
+        "message": event["message"],
+    }
+
+
+def build_live_market_read(
     price: float,
-    last_candle: dict[str, float],
-    prev_candle: dict[str, float],
+    structure: dict[str, Any],
     config: dict[str, Any],
 ) -> dict[str, str]:
-    levels = config["levels"]
     logic = config["logic"]
-    lower_decision = levels["lower_decision"]
-    upper_supply = levels["upper_supply"]
-    upper_breakout = levels["upper_breakout"]
-    upper_extreme = levels["upper_extreme"]
+    near_buffer = float(logic["near_buffer"])
 
-    if bounce_confirmed(last_candle, prev_candle, lower_decision, logic["bounce_min_reclaim"]):
+    active_support = structure.get("active_support")
+    active_resistance = structure.get("active_resistance")
+    support_broken = bool(structure.get("support_broken"))
+    resistance_broken = bool(structure.get("resistance_broken"))
+    next_major = _next_major_level(price, config)
+
+    if active_support is not None and abs(price - active_support) <= near_buffer:
+        suffix = (
+            f" Resistance aktif terdekat ada di {format_price(active_resistance)}."
+            if active_resistance is not None
+            else ""
+        )
         return {
-            "state": "lower_bounce_confirmed",
+            "state": "support_zone_monitoring",
             "message": (
-                f"Harga berhasil bertahan di area support minor {format_price(lower_decision)} dan mulai memantul naik. "
-                f"Selama harga tetap di atas level ini, peluang naik masih layak diperhatikan."
+                f"Harga sedang menguji support aktif {format_price(active_support)}. "
+                "Pantau apakah muncul rejection bullish yang valid atau justru candle close breakdown pada level ini."
+                f"{suffix}"
             ),
         }
 
-    if breakout_valid(last_candle, prev_candle, lower_decision, "down", logic["min_body_ratio"]):
+    if active_resistance is not None and abs(price - active_resistance) <= near_buffer:
+        suffix = (
+            f" Support aktif terdekat ada di {format_price(active_support)}."
+            if active_support is not None
+            else ""
+        )
         return {
-            "state": "lower_breakdown_confirmed",
+            "state": "resistance_zone_monitoring",
             "message": (
-                f"Harga menembus support minor {format_price(lower_decision)} dengan penembusan yang valid. "
-                f"Selama harga tetap di bawah level ini, tekanan turun masih dominan."
+                f"Harga sedang menguji resistance aktif {format_price(active_resistance)}. "
+                "Pantau apakah muncul rejection bearish yang valid atau justru candle close breakout di atas level ini."
+                f"{suffix}"
             ),
         }
 
-    if rejection_confirmed(last_candle, upper_supply, "upper"):
+    if support_broken and active_resistance is not None and price < active_resistance:
         return {
-            "state": "upper_rejection_confirmed",
+            "state": "post_support_breakdown",
             "message": (
-                f"Harga menyentuh resistance minor {format_price(upper_supply)} lalu ditolak turun. "
-                f"Selama harga belum mampu bertahan di atas level ini, area atas masih rawan tekanan jual."
+                f"Struktur masih bearish setelah breakdown support. Resistance hasil flip berada di {format_price(active_resistance)}, "
+                f"sedangkan support aktif baru berada di {format_price(active_support)}."
             ),
         }
 
-    if breakout_valid(last_candle, prev_candle, upper_breakout, "up", logic["min_body_ratio"]):
+    if resistance_broken and active_support is not None and price > active_support:
+        next_text = f" Resistance aktif baru dipantau di {format_price(active_resistance)}." if active_resistance is not None else ""
         return {
-            "state": "upper_breakout_confirmed",
+            "state": "post_resistance_breakout",
             "message": (
-                f"Harga berhasil menembus resistance penting {format_price(upper_breakout)} dengan penembusan yang valid. "
-                f"Selama harga bertahan di atas level ini, peluang naik masih terbuka."
+                f"Struktur masih bullish setelah breakout resistance. Support hasil flip berada di {format_price(active_support)}.{next_text}"
             ),
         }
 
-    near_buffer = logic["near_buffer"]
-    if abs(price - lower_decision) <= near_buffer or market_zone(price, levels) == "near_lower_range":
+    if active_support is not None and active_resistance is not None:
         return {
-            "state": "near_lower_range",
+            "state": "neutral_structure",
             "message": (
-                f"Harga sedang mendekati area support minor {format_price(lower_decision)}. "
-                f"Jika level ini bertahan, harga berpeluang memantul naik. "
-                f"Jika level ini ditembus, tekanan turun bisa berlanjut.\n\n"
-                f"Resistance minor terdekat berada di {format_price(upper_supply)}, "
-                f"sedangkan {format_price(upper_breakout)} adalah level penting yang perlu ditembus untuk membuka peluang naik yang lebih kuat."
+                f"Harga masih bergerak di antara support aktif {format_price(active_support)} dan resistance aktif {format_price(active_resistance)}. "
+                "Tunggu harga masuk ke salah satu level itu atau tunggu candle close yang memberi konfirmasi baru."
             ),
         }
 
-    if abs(price - upper_supply) <= near_buffer or market_zone(price, levels) == "at_upper_supply":
+    if next_major is not None:
         return {
-            "state": "upper_supply_zone",
+            "state": "neutral_structure",
             "message": (
-                f"Harga sedang mendekati resistance minor {format_price(upper_supply)}. "
-                f"Jika gagal menembus area ini, harga berisiko tertahan atau berbalik turun. "
-                f"Jika mampu menembus dengan kuat, target perhatian berikutnya adalah {format_price(upper_breakout)}."
-            ),
-        }
-
-    if abs(price - upper_breakout) <= near_buffer or market_zone(price, levels) == "breakout_zone":
-        return {
-            "state": "upper_breakout_watch",
-            "message": (
-                f"Harga sedang mendekati resistance penting {format_price(upper_breakout)}. "
-                f"Kenaikan baru dianggap kuat jika candle mampu ditutup jelas di atas level ini, bukan hanya lewat sesaat."
-            ),
-        }
-
-    if price >= upper_extreme:
-        return {
-            "state": "extreme_upper_zone",
-            "message": (
-                f"Harga sudah masuk area atas {format_price(upper_extreme)}. "
-                f"Zona ini rawan pergerakan berlebihan, jadi hindari mengejar harga tanpa konfirmasi yang jelas."
+                f"Struktur aktif belum lengkap, tetapi level referensi berikutnya berada di {format_price(next_major)}. "
+                "Tunggu pembentukan swing yang lebih jelas sebelum membaca market terlalu agresif."
             ),
         }
 
     return {
-        "state": "neutral",
-        "message": (
-            f"Harga masih bergerak di antara support minor {format_price(lower_decision)} dan resistance minor {format_price(upper_supply)}. "
-            f"Level penting di atas berada di {format_price(upper_breakout)}."
-        ),
+        "state": "neutral_structure",
+        "message": "Struktur market belum cukup jelas. Tunggu candle close berikutnya untuk validasi support atau resistance aktif yang baru.",
     }

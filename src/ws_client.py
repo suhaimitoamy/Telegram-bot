@@ -9,7 +9,8 @@ import requests
 import websocket
 
 from src.config import get_env, load_config
-from src.market_reader import build_market_read, breakout_valid
+from src.market_reader import build_live_market_read, build_structure_event_read, breakout_valid
+from src.market_structure import ensure_market_structure, initialize_market_structure, process_candle_close
 from src.news_engine import process_news_events
 from src.session_engine import (
     get_current_session,
@@ -38,6 +39,7 @@ runtime: dict[str, Any] = {
     "last_session": None,
     "sent_event_keys": set(),
     "last_caution_key": None,
+    "last_structure_event_key": None,
     "news_state": {
         "last_fetch_at": None,
         "cached_events": [],
@@ -52,6 +54,7 @@ runtime: dict[str, Any] = {
         "high_breakout_sent": False,
         "low_breakout_sent": False,
     },
+    "market_structure": None,
     "bootstrapped": False,
     "last_closed_notice_key": None,
 }
@@ -110,6 +113,7 @@ def reset_intraday_runtime() -> None:
     runtime["last_session"] = None
     runtime["sent_event_keys"] = set()
     runtime["last_caution_key"] = None
+    runtime["last_structure_event_key"] = None
     runtime["news_state"] = {
         "last_fetch_at": None,
         "cached_events": [],
@@ -124,6 +128,7 @@ def reset_intraday_runtime() -> None:
         "high_breakout_sent": False,
         "low_breakout_sent": False,
     }
+    runtime["market_structure"] = None
 
 
 def bootstrap() -> None:
@@ -131,6 +136,7 @@ def bootstrap() -> None:
     runtime["candles"] = fetch_bootstrap_candles()[-runtime["config"]["logic"]["max_history"]:]
     runtime["live_bucket"] = None
     reset_intraday_runtime()
+    runtime["market_structure"] = initialize_market_structure(runtime["candles"], runtime["config"])
     runtime["bootstrapped"] = True
 
 
@@ -150,15 +156,19 @@ def maybe_send_news_events(now: datetime) -> None:
             send_news_alert(item["title"], item["message"])
 
 
-def maybe_send_read(price: float) -> None:
+def maybe_send_live_read(price: float) -> None:
     candles = runtime["candles"]
-    if len(candles) < 2:
+    if not candles:
         return
 
-    read_data = build_market_read(
+    runtime["market_structure"] = ensure_market_structure(
+        runtime["market_structure"],
+        candles,
+        runtime["config"],
+    )
+    read_data = build_live_market_read(
         price=price,
-        last_candle=candles[-1],
-        prev_candle=candles[-2],
+        structure=runtime["market_structure"],
         config=runtime["config"],
     )
 
@@ -167,6 +177,19 @@ def maybe_send_read(price: float) -> None:
         runtime["last_sent_state"] = state
         send_market_read(state=state, price=price, message=read_data["message"])
         print(f"STATE -> {state}")
+
+
+def maybe_send_structure_event(event: dict[str, Any], price: float) -> None:
+    event_key = (event.get("state"), event.get("reference_level"))
+    if event_key == runtime["last_structure_event_key"]:
+        return
+
+    runtime["last_structure_event_key"] = event_key
+    read_data = build_structure_event_read(event)
+    state = read_data["state"]
+    runtime["last_sent_state"] = state
+    send_market_read(state=state, price=price, message=read_data["message"])
+    print(f"STATE -> {state}")
 
 
 def update_asia_range(price: float, now: datetime, session_name: str | None) -> None:
@@ -287,43 +310,51 @@ def maybe_send_asia_liquidity_events(price: float) -> None:
 
 def build_caution(price: float, now: datetime) -> tuple[str, str] | None:
     config = runtime["config"]
-    levels = config["levels"]
     logic = config["logic"]
     session_name = runtime["last_session"]
-    lower = levels["lower_decision"]
-    upper_supply = levels["upper_supply"]
-    upper_breakout = levels["upper_breakout"]
-    near_buffer = logic["near_buffer"]
+    near_buffer = float(logic["near_buffer"])
 
     candles = runtime["candles"]
     if len(candles) < 2:
         return None
-    last_candle = candles[-1]
-    prev_candle = candles[-2]
 
-    middle_area = (lower + near_buffer) < price < (upper_supply - near_buffer)
+    runtime["market_structure"] = ensure_market_structure(
+        runtime["market_structure"],
+        candles,
+        config,
+    )
+    structure = runtime["market_structure"]
+    active_support = structure.get("active_support")
+    active_resistance = structure.get("active_resistance")
+    last_closed_candle = candles[-1]
+
+    middle_area = (
+        active_support is not None
+        and active_resistance is not None
+        and (active_support + near_buffer) < price < (active_resistance - near_buffer)
+    )
     if session_name == "asia" and middle_area:
         return (
             "asia_middle",
-            "Sesi Asia cenderung lebih tenang. Selama harga masih berada di area tengah dan belum dekat level penting, belum ada alasan kuat untuk entry.",
+            "Sesi Asia cenderung lebih tenang. Selama harga masih berada di area tengah struktur aktif dan belum dekat level penting, belum ada alasan kuat untuk entry.",
         )
 
     if middle_area:
         return (
             "middle_area",
-            "Harga masih berada di area tengah, belum dekat support minor atau resistance minor. Belum ada alasan kuat untuk entry.",
+            "Harga masih berada di area tengah antara support aktif dan resistance aktif. Belum ada alasan kuat untuk entry sebelum harga kembali ke level struktur.",
         )
 
-    if price > upper_breakout and not breakout_valid(last_candle, prev_candle, upper_breakout, "up", logic["min_body_ratio"]):
+    if active_resistance is not None and price > active_resistance and last_closed_candle["close"] <= active_resistance:
         return (
             "weak_breakout_up",
-            f"Harga sempat melewati resistance penting {upper_breakout:,.3f}, tetapi penembusan belum valid. Hindari entry hanya karena spike.",
+            f"Harga sempat melewati resistance aktif {active_resistance:,.3f}, tetapi candle close terakhir belum menembus level itu dengan valid. Hindari entry hanya karena spike intrabar.",
         )
 
-    if price < lower and not breakout_valid(last_candle, prev_candle, lower, "down", logic["min_body_ratio"]):
+    if active_support is not None and price < active_support and last_closed_candle["close"] >= active_support:
         return (
             "weak_breakdown_down",
-            f"Harga sempat melewati support minor {lower:,.3f}, tetapi penembusan belum valid. Hindari entry terburu-buru sebelum ada penutupan candle yang jelas.",
+            f"Harga sempat melewati support aktif {active_support:,.3f}, tetapi candle close terakhir belum mengonfirmasi breakdown. Hindari entry terburu-buru sebelum ada penutupan candle yang sah.",
         )
 
     if session_name == "pre_london":
@@ -347,6 +378,27 @@ def maybe_send_caution(price: float, now: datetime) -> None:
         send_caution(message)
 
 
+def finalize_closed_candle(closed: dict[str, float]) -> bool:
+    runtime["candles"].append(closed)
+    max_history = runtime["config"]["logic"]["max_history"]
+    runtime["candles"] = runtime["candles"][-max_history:]
+
+    runtime["market_structure"] = ensure_market_structure(
+        runtime["market_structure"],
+        runtime["candles"],
+        runtime["config"],
+    )
+    event = process_candle_close(
+        runtime["market_structure"],
+        runtime["candles"],
+        runtime["config"],
+    )
+    if event is not None:
+        maybe_send_structure_event(event, closed["close"])
+        return True
+    return False
+
+
 def handle_tick(price: float, tick_dt: datetime) -> None:
     current_bucket = bucket_start(tick_dt)
     live_bucket = runtime["live_bucket"]
@@ -362,7 +414,7 @@ def handle_tick(price: float, tick_dt: datetime) -> None:
             "low": price,
             "close": price,
         }
-        maybe_send_read(price)
+        maybe_send_live_read(price)
         maybe_send_asia_liquidity_events(price)
         maybe_send_caution(price, tick_dt)
         return
@@ -371,15 +423,13 @@ def handle_tick(price: float, tick_dt: datetime) -> None:
         live_bucket["high"] = max(live_bucket["high"], price)
         live_bucket["low"] = min(live_bucket["low"], price)
         live_bucket["close"] = price
-        maybe_send_read(price)
+        maybe_send_live_read(price)
         maybe_send_asia_liquidity_events(price)
         maybe_send_caution(price, tick_dt)
         return
 
     closed = live_bucket.copy()
-    runtime["candles"].append(closed)
-    max_history = runtime["config"]["logic"]["max_history"]
-    runtime["candles"] = runtime["candles"][-max_history:]
+    event_sent = finalize_closed_candle(closed)
 
     runtime["live_bucket"] = {
         "datetime": current_bucket,
@@ -388,9 +438,10 @@ def handle_tick(price: float, tick_dt: datetime) -> None:
         "low": price,
         "close": price,
     }
-    maybe_send_read(price)
     maybe_send_asia_liquidity_events(price)
     maybe_send_caution(price, tick_dt)
+    if not event_sent:
+        maybe_send_live_read(price)
 
 
 def on_open(ws: websocket.WebSocketApp) -> None:

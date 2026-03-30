@@ -8,15 +8,15 @@ from src.config import get_env
 
 
 STATE_LABELS = {
-    "near_lower_range": "Dekat support minor",
-    "lower_bounce_confirmed": "Pantulan dari support minor",
-    "lower_breakdown_confirmed": "Support minor ditembus",
-    "upper_supply_zone": "Dekat resistance minor",
-    "upper_rejection_confirmed": "Tertolak dari resistance minor",
-    "upper_breakout_watch": "Pantau penembusan resistance penting",
-    "upper_breakout_confirmed": "Resistance penting berhasil ditembus",
-    "extreme_upper_zone": "Masuk area atas",
-    "neutral": "Netral",
+    "support_zone_monitoring": "Pantau support aktif",
+    "resistance_zone_monitoring": "Pantau resistance aktif",
+    "support_bounce_confirmed": "Pantulan valid dari support aktif",
+    "support_breakdown_confirmed": "Support aktif ditembus valid",
+    "post_support_breakdown": "Struktur bearish pasca-breakdown",
+    "resistance_rejection_confirmed": "Penolakan valid dari resistance aktif",
+    "resistance_breakout_confirmed": "Resistance aktif ditembus valid",
+    "post_resistance_breakout": "Struktur bullish pasca-breakout",
+    "neutral_structure": "Struktur netral",
 }
 
 
